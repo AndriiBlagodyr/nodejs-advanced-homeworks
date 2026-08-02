@@ -7,7 +7,7 @@ import { attachRequestHandler } from './server.js';
 const PORT = 3443;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Certs live in hw-03/ (one level above src/)
+// Certs live in repo root (one level above src/)
 const options = {
   key: fs.readFileSync(path.join(__dirname, '../cert.key')),
   cert: fs.readFileSync(path.join(__dirname, '../cert.pem')),

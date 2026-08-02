@@ -44,21 +44,21 @@ Paste into `README.md` the output of `openssl s_client -connect localhost:3443` 
 
 ## Acceptance criteria
 
-- [ ] **No `http`/`https`.** No file under `src/` imports `http` or `https`:  
-  `grep -REn "(require\(|from )['\"](node:)?https?['\"]" src/` produces no matches, while  
-  `grep -n "net.createServer" src/server.js` and  
+- [ ] **No `http`/`https`.** No file under `src/` imports `http` or `https`:
+  `grep -REn "(require\(|from )['\"](node:)?https?['\"]" src/` produces no matches, while
+  `grep -n "net.createServer" src/server.js` and
   `grep -n "tls.createServer" src/https-server.js` each produce one match.
-- [ ] **Plain server responds correctly.**  
-  `curl -sv http://localhost:3000/` → first line `HTTP/1.1 200 OK` and header `Content-Type: text/plain`.  
+- [ ] **Plain server responds correctly.**
+  `curl -sv http://localhost:3000/` → first line `HTTP/1.1 200 OK` and header `Content-Type: text/plain`.
   `curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/nope` prints `404`.
-- [ ] **Header parser works.**  
+- [ ] **Header parser works.**
   `curl -s http://localhost:3000/headers -H "X-Demo: abc"` returns a body that includes lines `host:` and `x-demo: abc` (keys lower-case) — i.e. method/path/headers are actually parsed into a structure, not hardcoded.
-- [ ] **HTTPS variant runs on a self-signed cert.**  
-  `curl -sk -o /dev/null -w "%{http_code}\n" https://localhost:3443/` prints `200`.  
+- [ ] **HTTPS variant runs on a self-signed cert.**
+  `curl -sk -o /dev/null -w "%{http_code}\n" https://localhost:3443/` prints `200`.
   The certificate generation command (`openssl req -x509 -newkey rsa:2048 -nodes ...`) is present in `README.md`, and `*.pem` / `*.key` are in `.gitignore` (not committed).
-- [ ] **Debug session is documented.**  
-  `README.md` contains an `openssl s_client -connect localhost:3443 -servername localhost` output block with a line matching  
-  `grep -E "verify (error|return code)" README.md`,  
+- [ ] **Debug session is documented.**
+  `README.md` contains an `openssl s_client -connect localhost:3443 -servername localhost` output block with a line matching
+  `grep -E "verify (error|return code)" README.md`,
   plus one sentence explaining the self-signed verify error code.
 
 ## Submission format

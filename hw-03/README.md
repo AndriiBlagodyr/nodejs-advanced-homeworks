@@ -13,9 +13,11 @@ node src/https-server.js
 
 ## Self-signed certificate
 
+Generate in the `hw-03/` directory (next to `src/`):
+
 ```bash
 openssl req -x509 -newkey rsa:2048 -nodes \
-  -keyout key.pem -out cert.pem -days 365 \
+  -keyout cert.key -out cert.pem -days 365 \
   -subj "/CN=localhost"
 ```
 

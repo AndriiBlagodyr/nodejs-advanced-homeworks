@@ -39,14 +39,52 @@ export function handleRequest(req) {
 }
 
 /**
+ * Read Content-Length from a raw header block (before \r\n\r\n).
+ * Returns 0 when the header is missing or invalid.
+ */
+function getContentLength(headersPart) {
+  const lines = headersPart.split('\r\n').slice(1); // skip request-line
+  for (const line of lines) {
+    const colonIndex = line.indexOf(':');
+    if (colonIndex === -1) continue;
+
+    const key = line.slice(0, colonIndex).trim().toLowerCase();
+    if (key !== 'content-length') continue;
+
+    const n = Number(line.slice(colonIndex + 1).trim());
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  }
+  return 0;
+}
+
+/**
  * Attach raw HTTP request handling to a net/tls socket.
+ * 1) Buffer until headers end (\r\n\r\n)
+ * 2) Buffer until body length from Content-Length is present
+ * Framing uses latin1 so 1 byte = 1 character (safe indices / lengths).
  */
 export function attachRequestHandler(socket, { label = 'HTTP' } = {}) {
-  socket.on('data', (buffer) => {
-    const rawData = buffer.toString('utf-8');
+  let buf = '';
+  let done = false;
+
+  socket.on('data', (chunk) => {
+    if (done) return;
+
+    // latin1: 1 byte ↔ 1 char — framing indices stay correct
+    buf += chunk.toString('latin1');
+
+    const headerEnd = buf.indexOf('\r\n\r\n');
+    if (headerEnd === -1) return; // still waiting for headers
+
+    const contentLength = getContentLength(buf.slice(0, headerEnd));
+    const totalNeeded = headerEnd + 4 + contentLength; // 4 = length of \r\n\r\n
+    if (buf.length < totalNeeded) return; // still waiting for body bytes
+
+    done = true;
+    const rawRequest = buf.slice(0, totalNeeded);
 
     try {
-      const req = parseHttpRequest(rawData);
+      const req = parseHttpRequest(rawRequest);
       console.log(`[${label}] [${new Date().toISOString()}] ${req.method} ${req.path}`);
 
       const response = handleRequest(req);

@@ -1,87 +1,64 @@
-# Homework — Raw HTTP/HTTPS server
+# Homework — Dockerize API + Postgres
 
 ## Brief
 
-You build an HTTP server from scratch — without a framework and without the `http` module. The goal is to see that HTTP/1.1 is just text over TCP: you accept bytes from the socket yourself, parse the request-line and headers, and form a valid response yourself.
+Package the Lecture 4-style HTTP service (Express/Fastify) into a container and start it together with Postgres using a single command.
 
-This is the level that `http.createServer` usually hides from you. At work, this is exactly what you need when you must figure out “why the client sees 400”, read `curl -v` or Wireshark output, and understand where `Content-Length`, `Connection: keep-alive`, and the status line come from.
+The goal is not “learn Docker”, but to understand three things that make real images weigh 1.2 GB instead of 180 MB and fail in production: how layer cache works, why multi-stage builds matter, and why the container must not run as root.
 
 ## What to do
 
-### 1. HTTP server on `net.createServer()`
+### 1. Multi-stage Dockerfile
 
-No `require('http')` — you accept raw bytes from a TCP socket.
+At least two stages:
 
-### 2. Request parser
+| Stage | Contains |
+|-------|----------|
+| `builder` | dev dependencies, build |
+| `runner` | production dependencies + build artifact only |
 
-Extract from the incoming text: `method`, `path`, and a `headers` map (keys normalized to lower-case).
+The final image must not include dev dependencies or source `.ts` / tests.
 
-### 3. Routing and valid responses
+### 2. Layer order for cache
 
-| Request | Response |
-|---------|----------|
-| `GET /` | `200 OK` (`Content-Type: text/plain`) |
-| `GET /headers` | parsed request headers |
-| anything else | `404 Not Found` |
+Copy `package*.json` and run `npm ci` **before** copying the rest of the code. Changing one line in `src/` must not reinstall dependencies.
 
-Every response must be correct HTTP/1.1: status line, `Content-Type`, `Content-Length`, blank line, body.
+### 3. Non-root
 
-### 4. HTTPS variant
+The final stage switches to an unprivileged user (`USER node` or a custom user via `adduser`). The process must not run as uid 0.
 
-On `tls.createServer()` (no `require('https')`), with a self-signed certificate (`openssl req -x509`). Reuse the same request handler.
+### 4. `.dockerignore`
 
-### 5. Debug session
+At least: `node_modules`, `.git`, `Dockerfile`, `*.md`, `.env`.
 
-Paste into `README.md` the output of `openssl s_client -connect localhost:3443` including a `verify error` line (expected for self-signed) and explain in one sentence what that error code means:
+### 5. `HEALTHCHECK`
 
-| Code | Meaning |
-|------|---------|
-| 18 | self-signed |
-| 19 | chain incomplete |
-| 10 | expired |
+In the Dockerfile, hits your `/health` endpoint.
 
-**Constraints.** Start from an empty repository — all code is yours. The Node standard library (`net`, `tls`, `fs`, `crypto`) is allowed; third-party npm dependencies are not.
+### 6. `docker-compose.yml`
+
+Two services: `api` and `postgres:17`. Postgres uses a named volume. API waits for DB readiness via `depends_on` + `condition: service_healthy`.
+
+### 7. `docker-compose.override.yml` for dev
+
+Bind-mounts code, enables hot-reload, keeps the port published. Base `docker-compose.yml` must remain usable for CI without the override.
+
+### 8. `README.md`
+
+Start commands and — required — final image size (`docker images`) next to a naive single-stage image size, with one sentence explaining the difference.
 
 ## Acceptance criteria
 
-- [ ] **No `http`/`https`.** No file under `src/` imports `http` or `https`:
-  `grep -REn "(require\(|from )['\"](node:)?https?['\"]" src/` produces no matches, while
-  `grep -n "net.createServer" src/server.js` and
-  `grep -n "tls.createServer" src/https-server.js` each produce one match.
-- [ ] **Plain server responds correctly.**
-  `curl -sv http://localhost:3000/` → first line `HTTP/1.1 200 OK` and header `Content-Type: text/plain`.
-  `curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/nope` prints `404`.
-- [ ] **Header parser works.**
-  `curl -s http://localhost:3000/headers -H "X-Demo: abc"` returns a body that includes lines `host:` and `x-demo: abc` (keys lower-case) — i.e. method/path/headers are actually parsed into a structure, not hardcoded.
-- [ ] **HTTPS variant runs on a self-signed cert.**
-  `curl -sk -o /dev/null -w "%{http_code}\n" https://localhost:3443/` prints `200`.
-  The certificate generation command (`openssl req -x509 -newkey rsa:2048 -nodes ...`) is present in `README.md`, and `*.pem` / `*.key` are in `.gitignore` (not committed).
-- [ ] **Debug session is documented.**
-  `README.md` contains an `openssl s_client -connect localhost:3443 -servername localhost` output block with a line matching
-  `grep -E "verify (error|return code)" README.md`,
-  plus one sentence explaining the self-signed verify error code.
+- [ ] Multi-stage is real (`FROM` ≥ 2; runner `npm ci` uses `--omit=dev` or `--only=production`)
+- [ ] Layer cache: `COPY package` before `COPY . .`
+- [ ] Non-root: `USER` present; `docker run --rm <image> id -u` ≠ 0
+- [ ] `.dockerignore` includes `node_modules` and `.git`
+- [ ] Healthcheck → `healthy` after `docker compose up -d`
+- [ ] `docker compose up -d` → `GET /health` returns 200
+- [ ] Postgres data survives `docker compose down` (without `-v`); documented in README
+- [ ] `docker compose -f docker-compose.yml config` has no `source: ./src` bind mount
+- [ ] README has both image sizes + one-sentence explanation
 
-## Submission format
+## Submission
 
-**Repository:** a public GitHub repository (or branch `hw-03` in an existing course repo) + a Pull Request.
-
-**Structure:**
-
-| File | Purpose |
-|------|---------|
-| `src/server.js` | raw HTTP on `net` |
-| `src/https-server.js` | HTTPS on `tls` (reuses parser/handler from `server.js`) |
-| `README.md` | start commands for both servers, self-signed cert generation command, pasted `openssl s_client` output with verify error explanation |
-| `.gitignore` | excludes generated `*.pem` / `*.key` |
-
-**README requirement:** the grader must be able to run everything with two commands (`node src/server.js`, `node src/https-server.js`) — no guessing ports or flags.
-
-In the LMS, submit the **PR link**, not the main branch.
-
-## Relation to the course project
-
-This is a foundation homework outside the course project — it adds nothing to the Marketplace API.
-
-Its goal is to build a mental model of HTTP/TLS at the bytes-and-sockets level. Later, when working with Express/Fastify (Lecture 4) and the NestJS layer, you will understand what the framework does for you, and you will be able to debug network and TLS issues with `curl -v` and `openssl s_client`, not only through framework logs.
-
-Skills from this homework — reading a raw request, self-signed certificates, verify error codes — are reused directly in Lecture 27 (Security hardening, mTLS).
+Public GitHub repo (or branch `hw-05`) + Pull Request. Submit the **PR link** in the LMS.

@@ -4,11 +4,10 @@ services:
       context: .
       dockerfile: Dockerfile
       target: runner
-    ports:
-      - "3000:3000"
+    restart: unless-stopped
     environment:
       PORT: "3000"
-      DATABASE_URL: postgresql://app:app@postgres:5432/app
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-app}
       NODE_ENV: production
     depends_on:
       postgres:
@@ -28,14 +27,15 @@ services:
 
   postgres:
     image: postgres:17
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: app
-      POSTGRES_DB: app
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-app}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 10

@@ -22,6 +22,24 @@ async function initDb() {
   }
 }
 
+async function waitForDb({ retries = 30, delayMs = 1000 } = {}) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await initDb();
+      console.log('Database is ready');
+      return;
+    } catch (err) {
+      console.error(
+        `DB connect/init attempt ${attempt}/${retries} failed: ${err.message}`
+      );
+      if (attempt === retries) {
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 app.get('/health', async (_req, res) => {
   try {
     await pool.query('SELECT 1');
@@ -43,7 +61,12 @@ app.get('/users', async (_req, res) => {
   }
 });
 
-await initDb();
+try {
+  await waitForDb();
+} catch (err) {
+  console.error('Could not initialize database:', err.message);
+  process.exit(1);
+}
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`API listening on http://0.0.0.0:${PORT}`);

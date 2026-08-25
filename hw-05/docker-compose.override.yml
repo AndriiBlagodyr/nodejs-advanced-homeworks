@@ -1,0 +1,16 @@
+services:
+  api:
+    build:
+      target: builder
+    # builder image includes nodemon; rebuild after changing target: docker compose up -d --build
+    command: npx nodemon --watch src src/index.js
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ./src:/app/src
+
+  postgres:
+    ports:
+      - "5432:5432"

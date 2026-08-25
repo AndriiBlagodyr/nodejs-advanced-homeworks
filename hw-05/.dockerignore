@@ -1,0 +1,16 @@
+node_modules
+.git
+.gitignore
+Dockerfile
+Dockerfile.naive
+docker-compose.yml
+docker-compose.override.yml
+*.md
+.env
+.env.*
+*.pem
+*.key
+cert.*
+npm-debug.log*
+.DS_Store
+hw-03

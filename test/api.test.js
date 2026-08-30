@@ -132,3 +132,18 @@ test('product pagination returns an opaque next cursor', async () => {
   assert.equal(second.status, 200);
   assert.equal(secondPage.items[0].id, 3);
 });
+
+test('invalid resource IDs return documented 400 problem responses', async () => {
+  for (const path of ['/products/abc', '/orders/abc']) {
+    const response = await fetch(`${baseUrl}${path}`);
+    const problem = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.match(
+      response.headers.get('content-type'),
+      /^application\/problem\+json/,
+    );
+    assert.equal(problem.status, 400);
+    assert.equal(problem.instance, path);
+  }
+});

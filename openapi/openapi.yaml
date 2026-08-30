@@ -3,9 +3,10 @@ info:
   title: Marketplace API
   version: 1.0.0
   description: Contract-first API for browsing products and creating orders.
+  license: { name: UNLICENSED, url: https://choosealicense.com/no-permission/ }
 security: []
 servers:
-  - url: http://localhost:3000
+  - url: /
     description: Local development server
 tags:
   - name: Products
@@ -31,6 +32,8 @@ paths:
                 $ref: "#/components/schemas/ProductPage"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
   /products/{productId}:
     parameters:
       - $ref: "#/components/parameters/ProductId"
@@ -46,8 +49,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Product"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
   /orders:
     get:
       tags: [Orders]
@@ -66,6 +73,8 @@ paths:
                 $ref: "#/components/schemas/OrderPage"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
     post:
       tags: [Orders]
       operationId: createOrder
@@ -109,6 +118,8 @@ paths:
           $ref: "#/components/responses/NotFound"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
   /orders/{orderId}:
     parameters:
       - $ref: "#/components/parameters/OrderId"
@@ -124,8 +135,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 components:
   parameters:
     Limit:
@@ -177,6 +192,12 @@ components:
             $ref: "#/components/schemas/Problem"
     UnprocessableEntity:
       description: The request is valid but conflicts with an earlier idempotent request.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    InternalServerError:
+      description: The server failed to produce a response that conforms to the API contract.
       content:
         application/problem+json:
           schema:

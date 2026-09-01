@@ -1,109 +1,181 @@
-# HW-09 — Marketplace API Contract
+# HW-11 — Typed Configuration and Secret Rotation
 
-Contract-first Marketplace API designed with OpenAPI 3.0.3. The specification
-contains five operations across the `products` and `orders` resources, cursor
-pagination, mandatory idempotency for order creation, and RFC 9457-style
-`application/problem+json` errors.
+This is the second homework of the Marketplace course project. The application
+uses NestJS, PostgreSQL, and one validated configuration pipeline:
 
-## Contract option
+```text
+process.env -> Zod schema -> ConfigService<Env, true> -> application code
+file secret -> pg.Pool password callback -> PostgreSQL
+```
 
-This solution uses **Option B — runtime validation at the API boundary**.
-Express OpenAPI Validator validates every request and response against
-`openapi/openapi.yaml`. The application has in-memory data and implements all
-five documented operations.
+Previous homework snapshots are archived in:
 
-The optional full idempotency behavior is included:
+| Folder | Topic |
+| --- | --- |
+| [`hw-03/`](./hw-03) | Raw HTTP/HTTPS with `net` and `tls` |
+| [`hw-05/`](./hw-05) | Docker, Compose, Express, and PostgreSQL |
+| [`hw-09/`](./hw-09) | OpenAPI, idempotency, and contract validation |
 
-- same `Idempotency-Key` and same body: the original `201` response with
-  `Idempotency-Replay: true`;
-- same key and a different body: `422 application/problem+json`.
+## Configuration
 
-## Install and run
+All application variables are defined in
+`src/config/env.schema.ts`. Invalid values are reported together before Nest
+finishes creating its dependency graph.
 
-Requires Node.js 22 or newer.
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `DB_URL` | yes | none | PostgreSQL URL without a password |
+| `PORT` | no | `3000` | HTTP port, coerced to an integer |
+| `NODE_ENV` | no | `development` | `development`, `production`, or `test` |
+| `DB_PASSWORD_FILE` | no | `secrets/db_password` | Path to the password file |
+
+The password itself is never an environment variable. `DatabaseService`
+passes an async password function to `pg.Pool`; every new connection rereads
+`DB_PASSWORD_FILE`.
+
+### Initial setup
+
+Requires Node.js 22+, Docker with Compose, and OpenSSL.
 
 ```bash
 npm install
-npm start
+cp .env.example .env
+mkdir -p secrets
+printf '%s\n' 'local_dev_password_change_me' > secrets/db_password
+chmod 600 secrets/db_password
 ```
 
-The API is available at `http://localhost:3000`.
+`.env` and `secrets/` are ignored by Git and excluded from the Docker build
+context. The password above is only a local bootstrap value. On a clean
+PostgreSQL volume, the official image initializes the `app` role from the same
+Compose file secret, so the database and application cannot start with
+different password sources.
 
-## Automated checks
-
-Lint the OpenAPI document (warnings are allowed, errors fail):
+### Run with Docker Compose
 
 ```bash
-npm run lint:openapi
-# equivalent acceptance-criteria command:
-npx @redocly/cli lint openapi/openapi.yaml
+docker compose up --build -d
+curl http://localhost:3000/health
+curl http://localhost:3000/db
 ```
 
-Run the contract-backed HTTP tests:
+Expected responses:
+
+```json
+{"status":"ok","uptime":12.34}
+{"status":"ok","database":"reachable"}
+```
+
+Stop the stack:
 
 ```bash
+docker compose down
+```
+
+Use `docker compose down -v` when the PostgreSQL data volume must also be
+removed. The next initialization reads the current value of
+`secrets/db_password`.
+
+### Run the API on the host
+
+Start only PostgreSQL in Docker, then run Nest locally:
+
+```bash
+docker compose up -d postgres
+npm run start
+```
+
+Development watch mode is intentionally separate:
+
+```bash
+npm run start:dev
+```
+
+## Rotate the database password
+
+Keep the Compose stack running. Record the uptime, rotate, verify a new
+database connection, and compare uptime again:
+
+```bash
+curl http://localhost:3000/health
+bash rotate.sh
+curl -i http://localhost:3000/db
+curl http://localhost:3000/health
+```
+
+`rotate.sh` performs the required sequence:
+
+1. `ALTER ROLE` changes the PostgreSQL password.
+2. The mounted `secrets/db_password` file is updated.
+3. Existing application connections are terminated.
+4. `pg.Pool` opens a new connection and invokes the password function again.
+
+The `/db` request remains successful and the second uptime is greater than the
+first one because the API process is not restarted.
+
+## Checks
+
+Run all static and unit checks after a clean installation:
+
+```bash
+npm ci
 npm test
 ```
 
-Bundle the specification and check its operation/resource count and
-idempotency declaration:
+### Fail-fast configuration
+
+Temporarily hide the local env file and remove the required variable:
 
 ```bash
-npx @redocly/cli bundle openapi/openapi.yaml -o spec.json
-
-node -e "const s=require('./spec.json'),M=['get','post','put','patch','delete'];\
-const ops=Object.entries(s.paths).flatMap(([p,v])=>Object.keys(v).filter(m=>M.includes(m)).map(m=>[p,m]));\
-const idem=ops.flatMap(([p,m])=>s.paths[p][m].parameters??[]).map(x=>x.\$ref?s.components.parameters[x.\$ref.split('/').at(-1)]:x).find(x=>x?.in==='header'&&/idempotency-key/i.test(x.name));\
-console.log('operations:',ops.length,'resources:',new Set(Object.keys(s.paths).map(p=>p.split('/')[1])).size);\
-console.log('Idempotency-Key: required =',idem?.required,'description characters =',(idem?.description??'').trim().length)"
+mv .env /tmp/marketplace.env
+env -u DB_URL npm run start
+echo $?
+mv /tmp/marketplace.env .env
 ```
 
-Expected: 5 operations, 2 resources, `required = true`, and an idempotency
-description longer than 40 characters.
+The process exits nonzero and reports `DB_URL`.
 
-Run the textual acceptance checks:
+### `.env.example` synchronization
 
 ```bash
-grep -c 'Idempotency-Key' openapi/openapi.yaml
-grep -c 'next_cursor' openapi/openapi.yaml
-grep -c 'application/problem+json' openapi/openapi.yaml
+npm run check:env
 ```
 
-## Manual runtime verification
+The command compares `.env.example` against the actual Zod schema and exits
+with code 1 for a missing, duplicate, undocumented, or uncommented variable.
 
-Start the server in one terminal:
+### Git secret checks
 
 ```bash
-npm start
+git check-ignore .env secrets/db_password
+git ls-files .env secrets/db_password
+git status --ignored --porcelain | grep -E '^!! .*\.env$'
+git ls-files | grep -c '\.env$'
 ```
 
-Then run:
+The first command prints both ignored paths; the second prints nothing. The
+last count is `0` because only `.env.example`, not `.env`, is tracked.
+
+### Docker image secret checks
 
 ```bash
-# Missing Idempotency-Key: 400 problem+json from the OpenAPI validator
-curl -i -X POST http://localhost:3000/orders \
-  -H 'Content-Type: application/json' \
-  -d '{"items":[{"product_id":1,"quantity":1}]}'
-
-# Empty items: 400 problem+json from the OpenAPI validator
-curl -i -X POST http://localhost:3000/orders \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: empty-order' \
-  -d '{"items":[]}'
-
-# Valid request: 201
-curl -i -X POST http://localhost:3000/orders \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: order-1' \
-  -d '{"items":[{"product_id":1,"quantity":2}]}'
+docker build -t myapp .
+docker run --rm myapp ls -a /app
+docker run --rm myapp sh -c 'cat /app/.env' 2>&1
+docker inspect --format '{{.Config.Env}}' myapp
+docker history --no-trunc myapp | grep -i password
 ```
+
+`/app` contains `.env.example` but neither `.env` nor `secrets/`. Reading
+`.env` fails with `No such file or directory`; image environment and history
+contain no database password.
 
 ## Project layout
 
-- `openapi/openapi.yaml` — the source-of-truth API contract.
-- `src/app.js` — Express routes, validator middleware, and problem handler.
-- `src/index.js` — production entry point.
-- `test/api.test.js` — runtime contract and idempotency tests.
-
-Previous homeworks remain archived in [`hw-03/`](./hw-03) and
-[`hw-05/`](./hw-05).
+- `src/config/env.schema.ts` — Zod schema, `Env` type, and fail-fast validator.
+- `scripts/check-env-example.mjs` — schema/example contract check.
+- `src/database/` — dynamically authenticated PostgreSQL pool.
+- `src/health/` — `/health` uptime and `/db` database probes.
+- `secrets/db_password` — ignored local file secret.
+- `rotate.sh` — live PostgreSQL password rotation.
+- `docker-compose.yml` — local API and PostgreSQL stack.

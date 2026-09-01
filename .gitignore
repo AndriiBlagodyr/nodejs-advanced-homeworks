@@ -6,4 +6,7 @@ node_modules/
 *.key
 npm-debug.log*
 .DS_Store
-/spec.json
+secrets/
+dist/
+coverage/
+*.tsbuildinfo

@@ -161,14 +161,16 @@ last count is `0` because only `.env.example`, not `.env`, is tracked.
 ```bash
 docker build -t myapp .
 docker run --rm myapp ls -a /app
+docker run --rm myapp npm run check:env
 docker run --rm myapp sh -c 'cat /app/.env' 2>&1
 docker inspect --format '{{.Config.Env}}' myapp
 docker history --no-trunc myapp | grep -i password
 ```
 
-`/app` contains `.env.example` but neither `.env` nor `secrets/`. Reading
-`.env` fails with `No such file or directory`; image environment and history
-contain no database password.
+`/app` contains `.env.example`, compiled `dist/`, and the environment checker,
+but no source tree, `.env`, `test/`, or `secrets/`. Reading `.env` fails with
+`No such file or directory`; image environment and history contain no database
+password.
 
 ## Project layout
 

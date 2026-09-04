@@ -1,6 +1,11 @@
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { envSchema } from '../src/config/env.schema.ts';
+
+const sourceSchemaUrl = new URL('../src/config/env.schema.ts', import.meta.url);
+const builtSchemaUrl = new URL('../dist/config/env.schema.js', import.meta.url);
+const schemaUrl = existsSync(sourceSchemaUrl) ? sourceSchemaUrl : builtSchemaUrl;
+const { envSchema } = await import(schemaUrl);
 
 const examplePath = resolve('.env.example');
 const contents = await readFile(examplePath, 'utf8');

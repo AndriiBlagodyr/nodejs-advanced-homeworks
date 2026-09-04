@@ -10,11 +10,8 @@ secrets/
 hw-03/
 hw-05/
 hw-09/
-test/
-scripts/
 README.md
 docker-compose.yml
 Dockerfile
 init.sql
-rotate.sh
 npm-debug.log*

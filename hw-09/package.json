@@ -1,0 +1,23 @@
+{
+  "name": "marketplace-api-contract",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "lint:openapi": "redocly lint openapi/openapi.yaml",
+    "bundle:openapi": "redocly bundle openapi/openapi.yaml -o spec.json",
+    "test": "npm run lint:openapi && node --test"
+  },
+  "dependencies": {
+    "express": "4.22.2",
+    "express-openapi-validator": "5.6.2"
+  },
+  "devDependencies": {
+    "@redocly/cli": "2.46.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

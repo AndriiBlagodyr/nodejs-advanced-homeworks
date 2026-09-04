@@ -1,0 +1,17 @@
+node_modules
+dist
+*.tsbuildinfo
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+secrets/
+hw-03/
+hw-05/
+hw-09/
+README.md
+docker-compose.yml
+Dockerfile
+init.sql
+npm-debug.log*

@@ -1,183 +1,106 @@
-# HW-11 — Typed Configuration and Secret Rotation
+# HW-12 — Marketplace PostgreSQL data layer
 
-This is the second homework of the Marketplace course project. The application
-uses NestJS, PostgreSQL, and one validated configuration pipeline:
+This homework defines and measures the relational foundation of the Marketplace
+API. The main table is **`orders`**, seeded with **120,000 rows**.
 
-```text
-process.env -> Zod schema -> ConfigService<Env, true> -> application code
-file secret -> pg.Pool password callback -> PostgreSQL
+Previous snapshots are archived in [`hw-03/`](./hw-03),
+[`hw-05/`](./hw-05), [`hw-09/`](./hw-09), and [`hw-11/`](./hw-11).
+
+## Fresh-clone access
+
+One line to start the database:
+
+```bash
+mkdir -p secrets && cp secrets/db_password.example secrets/db_password && docker compose up -d --wait
 ```
 
-Previous homework snapshots are archived in:
+One line to connect and verify it:
 
-| Folder | Topic |
-| --- | --- |
-| [`hw-03/`](./hw-03) | Raw HTTP/HTTPS with `net` and `tls` |
-| [`hw-05/`](./hw-05) | Docker, Compose, Express, and PostgreSQL |
-| [`hw-09/`](./hw-09) | OpenAPI, idempotency, and contract validation |
+```bash
+docker compose exec -T db psql -U app -d marketplace -Atc "SELECT 1"
+```
+
+Both commands work on a fresh clone without editing a file. The committed
+`.example` password is a local development credential, not a production
+secret.
 
 ## Configuration
 
-All application variables are defined in
-`src/config/env.schema.ts`. Invalid values are reported together before Nest
-finishes creating its dependency graph.
+| Variable | Value | Source |
+| --- | --- | --- |
+| `DB_URL` | `postgresql://app@localhost:5432/marketplace` | HW-11 configuration store; `.env.example` is only its tracked contract |
+| Database password | file `secrets/db_password` | HW-11 file-secret store, initialized from tracked `secrets/db_password.example` for the local grader stand |
 
-| Variable | Required | Default | Description |
-| --- | --- | --- | --- |
-| `DB_URL` | yes | none | PostgreSQL URL without a password |
-| `PORT` | no | `3000` | HTTP port, coerced to an integer |
-| `NODE_ENV` | no | `development` | `development`, `production`, or `test` |
-| `DB_PASSWORD_FILE` | no | `secrets/db_password` | Path to the password file |
+No real `.env` or `secrets/db_password` file is tracked. The application
+connection URL remains `DB_URL`; no second connection variable was introduced.
 
-The password itself is never an environment variable. `DatabaseService`
-passes an async password function to `pg.Pool`; every new connection rereads
-`DB_PASSWORD_FILE`.
+## Apply schema and seed
 
-### Initial setup
-
-Requires Node.js 22+, Docker with Compose, and OpenSSL.
+The following is the complete clean-database workflow used to produce the
+optimization report:
 
 ```bash
-npm install
-cp .env.example .env
-mkdir -p secrets
-printf '%s\n' 'local_dev_password_change_me' > secrets/db_password
-chmod 600 secrets/db_password
+docker compose down -v
+docker compose up -d --wait
+docker compose exec -T db psql -U app -d marketplace -v ON_ERROR_STOP=1 -f - < db/schema.sql
+docker compose exec -T db psql -U app -d marketplace -v ON_ERROR_STOP=1 -f - < db/seed.sql
 ```
 
-`.env` and `secrets/` are ignored by Git and excluded from the Docker build
-context. The password above is only a local bootstrap value. On a clean
-PostgreSQL volume, the official image initializes the `app` role from the same
-Compose file secret, so the database and application cannot start with
-different password sources.
-
-### Run with Docker Compose
+Verify the schema and main-table volume:
 
 ```bash
-docker compose up --build -d
-curl http://localhost:3000/health
-curl http://localhost:3000/db
+docker compose exec -T db psql -U app -d marketplace -Atc "SELECT count(*) FROM information_schema.table_constraints WHERE constraint_type='FOREIGN KEY' AND table_schema='public';"
+docker compose exec -T db psql -U app -d marketplace -Atc "SELECT count(*) FROM orders;"
 ```
 
-Expected responses:
+Expected output is at least `3` foreign keys and at least `100000` orders. This
+seed produces `4` foreign keys and `120000` orders.
 
-```json
-{"status":"ok","uptime":12.34}
-{"status":"ok","database":"reachable"}
-```
+## Explain before indexes
 
-Stop the stack:
+Run these commands after schema and seed, but before `db/indexes.sql`. Every
+plan contains `Seq Scan` or `Parallel Seq Scan`.
 
 ```bash
-docker compose down
+docker compose exec -T db psql -U app -d marketplace -c "EXPLAIN (ANALYZE, BUFFERS) $(cat db/queries/q1.sql)"
+docker compose exec -T db psql -U app -d marketplace -c "EXPLAIN (ANALYZE, BUFFERS) $(cat db/queries/q2.sql)"
+docker compose exec -T db psql -U app -d marketplace -c "EXPLAIN (ANALYZE, BUFFERS) $(cat db/queries/q3.sql)"
 ```
 
-Use `docker compose down -v` when the PostgreSQL data volume must also be
-removed. The next initialization reads the current value of
-`secrets/db_password`.
+The queries represent:
 
-### Run the API on the host
+1. A user's order history for a date range.
+2. The pending-order fulfillment queue.
+3. Case-insensitive regional completed-order search.
 
-Start only PostgreSQL in Docker, then run Nest locally:
+## Apply indexes and explain again
 
 ```bash
-docker compose up -d postgres
-npm run start
+docker compose exec -T db psql -U app -d marketplace -v ON_ERROR_STOP=1 -f - < db/indexes.sql
+docker compose exec -T db psql -U app -d marketplace -c "ANALYZE;"
+docker compose exec -T db psql -U app -d marketplace -c "EXPLAIN (ANALYZE, BUFFERS) $(cat db/queries/q1.sql)"
+docker compose exec -T db psql -U app -d marketplace -c "EXPLAIN (ANALYZE, BUFFERS) $(cat db/queries/q2.sql)"
+docker compose exec -T db psql -U app -d marketplace -c "EXPLAIN (ANALYZE, BUFFERS) $(cat db/queries/q3.sql)"
 ```
 
-Development watch mode is intentionally separate:
+All three plans now use `Index Scan` or `Index Only Scan` and contain no
+sequential scan. The measured plans and explanations are in
+[`db/OPTIMIZATIONS.md`](./db/OPTIMIZATIONS.md).
+
+Verify that PostgreSQL installed partial or expression indexes:
 
 ```bash
-npm run start:dev
+docker compose exec -T db psql -U app -d marketplace -Atc "SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND (indexdef ILIKE '% WHERE %' OR indexdef ~ '\((\w+)\(');"
 ```
 
-## Rotate the database password
+Expected output: `2`.
 
-Keep the Compose stack running. Record the uptime, rotate, verify a new
-database connection, and compare uptime again:
+## Files
 
-```bash
-curl http://localhost:3000/health
-bash rotate.sh
-curl -i http://localhost:3000/db
-curl http://localhost:3000/health
-```
-
-`rotate.sh` performs the required sequence:
-
-1. `ALTER ROLE` changes the PostgreSQL password.
-2. The mounted `secrets/db_password` file is updated.
-3. Existing application connections are terminated.
-4. `pg.Pool` opens a new connection and invokes the password function again.
-
-The `/db` request remains successful and the second uptime is greater than the
-first one because the API process is not restarted.
-
-## Checks
-
-Run all static and unit checks after a clean installation:
-
-```bash
-npm ci
-npm test
-```
-
-### Fail-fast configuration
-
-Temporarily hide the local env file and remove the required variable:
-
-```bash
-mv .env /tmp/marketplace.env
-env -u DB_URL npm run start
-echo $?
-mv /tmp/marketplace.env .env
-```
-
-The process exits nonzero and reports `DB_URL`.
-
-### `.env.example` synchronization
-
-```bash
-npm run check:env
-```
-
-The command compares `.env.example` against the actual Zod schema and exits
-with code 1 for a missing, duplicate, undocumented, or uncommented variable.
-
-### Git secret checks
-
-```bash
-git check-ignore .env secrets/db_password
-git ls-files .env secrets/db_password
-git status --ignored --porcelain | grep -E '^!! .*\.env$'
-git ls-files | grep -c '\.env$'
-```
-
-The first command prints both ignored paths; the second prints nothing. The
-last count is `0` because only `.env.example`, not `.env`, is tracked.
-
-### Docker image secret checks
-
-```bash
-docker build -t myapp .
-docker run --rm myapp ls -a /app
-docker run --rm myapp npm run check:env
-docker run --rm myapp sh -c 'cat /app/.env' 2>&1
-docker inspect --format '{{.Config.Env}}' myapp
-docker history --no-trunc myapp | grep -i password
-```
-
-`/app` contains `.env.example`, compiled `dist/`, and the environment checker,
-but no source tree, `.env`, `test/`, or `secrets/`. Reading `.env` fails with
-`No such file or directory`; image environment and history contain no database
-password.
-
-## Project layout
-
-- `src/config/env.schema.ts` — Zod schema, `Env` type, and fail-fast validator.
-- `scripts/check-env-example.mjs` — schema/example contract check.
-- `src/database/` — dynamically authenticated PostgreSQL pool.
-- `src/health/` — `/health` uptime and `/db` database probes.
-- `secrets/db_password` — ignored local file secret.
-- `rotate.sh` — live PostgreSQL password rotation.
-- `docker-compose.yml` — local API and PostgreSQL stack.
+- `db/schema.sql` — five domain tables, constraints, and four foreign keys.
+- `db/seed.sql` — skewed users/products/orders data and `VACUUM (ANALYZE)`.
+- `db/queries/q1.sql`–`q3.sql` — one API-shaped statement per file.
+- `db/indexes.sql` — three query-driven indexes, including partial and
+  expression indexes.
+- `db/OPTIMIZATIONS.md` — full before/after execution plans.
+- `docker-compose.yml` — PostgreSQL 17 grader stand.

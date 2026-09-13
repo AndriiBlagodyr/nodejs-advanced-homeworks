@@ -8,5 +8,5 @@ CREATE INDEX idx_orders_pending_created_at
   WHERE status = 'pending';
 
 CREATE INDEX idx_orders_country_status_created_at
-  ON orders (lower(shipping_country), status, created_at DESC)
+  ON orders (shipping_country, status, created_at DESC)
   INCLUDE (id, total_cents);

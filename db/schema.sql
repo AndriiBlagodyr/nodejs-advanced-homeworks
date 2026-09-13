@@ -23,7 +23,6 @@ CREATE TABLE orders (
   total_cents numeric(12, 0) NOT NULL CHECK (total_cents >= 0),
   shipping_country char(2) NOT NULL
     CHECK (shipping_country ~ '^[A-Z]{2}$'),
-  idempotency_key text NOT NULL UNIQUE,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 

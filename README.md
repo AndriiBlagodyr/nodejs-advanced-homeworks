@@ -71,7 +71,7 @@ The queries represent:
 
 1. A user's order history for a date range.
 2. The pending-order fulfillment queue.
-3. Case-insensitive regional completed-order search.
+3. Regional completed-order search.
 
 ## Apply indexes and explain again
 
@@ -93,14 +93,14 @@ Verify that PostgreSQL installed partial or expression indexes:
 docker compose exec -T db psql -U app -d marketplace -Atc "SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND (indexdef ILIKE '% WHERE %' OR indexdef ~ '\((\w+)\(');"
 ```
 
-Expected output: `2`.
+Expected output: `1`.
 
 ## Files
 
 - `db/schema.sql` — five domain tables, constraints, and four foreign keys.
 - `db/seed.sql` — skewed users/products/orders data and `VACUUM (ANALYZE)`.
 - `db/queries/q1.sql`–`q3.sql` — one API-shaped statement per file.
-- `db/indexes.sql` — three query-driven indexes, including partial and
-  expression indexes.
+- `db/indexes.sql` — three query-driven indexes, including a partial index
+  for the pending queue.
 - `db/OPTIMIZATIONS.md` — full before/after execution plans.
 - `docker-compose.yml` — PostgreSQL 17 grader stand.

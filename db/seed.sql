@@ -49,7 +49,6 @@ INSERT INTO orders (
   status,
   total_cents,
   shipping_country,
-  idempotency_key,
   created_at
 )
 SELECT
@@ -75,7 +74,6 @@ SELECT
     WHEN order_number % 20 = 18 THEN 'CA'
     ELSE 'FR'
   END,
-  'seed-order-' || order_number,
   CASE
     WHEN order_number % 12 = 0 THEN
       timestamptz '2025-08-01 00:00:00+00'
@@ -118,9 +116,9 @@ INSERT INTO idempotency_records (
   created_at
 )
 SELECT
-  orders.idempotency_key,
+  'seed-order-' || orders.id,
   orders.id,
-  md5(orders.idempotency_key) || md5(orders.idempotency_key),
+  md5('seed-order-' || orders.id) || md5('seed-order-' || orders.id),
   201,
   jsonb_build_object(
     'id', orders.id,

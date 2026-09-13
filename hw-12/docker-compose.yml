@@ -4,7 +4,9 @@ services:
     environment:
       POSTGRES_USER: app
       POSTGRES_DB: marketplace
-      POSTGRES_PASSWORD: marketplace_dev_password
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
     ports:
       - "5432:5432"
     volumes:
@@ -14,6 +16,10 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
+
+secrets:
+  db_password:
+    file: ./secrets/db_password
 
 volumes:
   postgres_data:

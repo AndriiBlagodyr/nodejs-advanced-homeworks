@@ -2,18 +2,16 @@ import 'reflect-metadata';
 import { DataSource, type DataSourceOptions } from 'typeorm';
 import {
   IdempotencyRecord,
-  Job,
   Order,
   OrderItem,
   Product,
   User,
 } from './entities';
 import { InitialSchema1726000000000 } from './migrations/1726000000000-InitialSchema';
-import { AddCheckoutAndJobs1726100000000 } from './migrations/1726100000000-AddCheckoutAndJobs';
 
 function postgresConnection(): Record<string, string | number | undefined> {
-  if (process.env.DB_URL || process.env.DATABASE_URL) {
-    return { url: process.env.DB_URL ?? process.env.DATABASE_URL };
+  if (process.env.DB_URL) {
+    return { url: process.env.DB_URL };
   }
 
   return {
@@ -33,11 +31,8 @@ export function createDataSourceOptions(
     ...postgresConnection(),
     synchronize: false,
     logging: false,
-    entities: [User, Product, Order, OrderItem, IdempotencyRecord, Job],
-    migrations: [
-      InitialSchema1726000000000,
-      AddCheckoutAndJobs1726100000000,
-    ],
+    entities: [User, Product, Order, OrderItem, IdempotencyRecord],
+    migrations: [InitialSchema1726000000000],
     ...overrides,
   } as DataSourceOptions;
 }

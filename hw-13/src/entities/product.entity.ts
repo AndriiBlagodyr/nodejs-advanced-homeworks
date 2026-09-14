@@ -10,7 +10,6 @@ import { OrderItem } from './order-item.entity';
 @Entity({ name: 'products' })
 @Check(`length(trim(name)) >= 2`)
 @Check(`"price_cents" >= 0`)
-@Check(`"stock" >= 0`)
 export class Product {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;
@@ -20,9 +19,6 @@ export class Product {
 
   @Column({ type: 'int', name: 'price_cents' })
   priceCents: number;
-
-  @Column({ type: 'int', default: 0 })
-  stock: number;
 
   @Column({ type: 'boolean', name: 'is_active', default: true })
   isActive: boolean;

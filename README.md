@@ -1,106 +1,91 @@
-# HW-12 — Marketplace PostgreSQL data layer
+# HW-13 — TypeORM data layer
 
-This homework defines and measures the relational foundation of the Marketplace
-API. The main table is **`orders`**, seeded with **120,000 rows**.
+Marketplace schema from [HW-12](./hw-12) is now a TypeORM data layer: entities,
+relations, migrations (`synchronize: false`), an idempotent seed, an N+1 demo,
+and a QueryBuilder report. Connection settings come from `process.env`, which
+`scripts/with-secrets.sh` fills via Infisical. Previous homework snapshots live
+in `hw-03/`, `hw-05/`, `hw-09/`, `hw-11/`, and `hw-12/`.
 
-Previous snapshots are archived in [`hw-03/`](./hw-03),
-[`hw-05/`](./hw-05), [`hw-09/`](./hw-09), and [`hw-11/`](./hw-11).
-
-## Fresh-clone access
-
-One line to start the database:
+## Commands
 
 ```bash
-mkdir -p secrets && cp secrets/db_password.example secrets/db_password && docker compose up -d --wait
+npm ci
+npm run build
+npm run migrate
+npm run migrate:show
+npm run seed
+npm run demo:nplus1
+npm run report
 ```
 
-One line to connect and verify it:
+`synchronize` is set to `false` in `src/data-source.ts`. Schema changes go
+through `src/migrations/` only.
+
+## Seed row counts
+
+After `npm run seed` (and again after a second run) the counts stay:
 
 ```bash
-docker compose exec -T db psql -U app -d marketplace -Atc "SELECT 1"
+docker compose exec -T db psql -U app -d marketplace -c \
+  "SELECT
+     (SELECT count(*) FROM users) AS users,
+     (SELECT count(*) FROM products) AS products,
+     (SELECT count(*) FROM orders) AS orders,
+     (SELECT count(*) FROM order_items) AS order_items,
+     (SELECT count(*) FROM idempotency_records) AS idempotency_records;"
 ```
 
-Both commands work on a fresh clone without editing a file. The committed
-`.example` password is a local development credential, not a production
-secret.
+Expected: `users=8`, `products=8`, `orders=8`, `order_items=12`,
+`idempotency_records=5`.
 
-## Configuration
+## N+1 (order → items → product)
 
-| Variable | Value | Source |
-| --- | --- | --- |
-| `DB_URL` | `postgresql://app@localhost:5432/marketplace` | HW-11 configuration store; `.env.example` is only its tracked contract |
-| Database password | file `secrets/db_password` | HW-11 file-secret store, initialized from tracked `secrets/db_password.example` for the local grader stand |
-
-No real `.env` or `secrets/db_password` file is tracked. The application
-connection URL remains `DB_URL`; no second connection variable was introduced.
-
-## Apply schema and seed
-
-The following is the complete clean-database workflow used to produce the
-optimization report:
+Measured by `npm run demo:nplus1` (optional `N` via argv, default `8`):
 
 ```bash
-docker compose down -v
+npm run demo:nplus1 -- 8
+npm run demo:nplus1 -- 16   # after seeding enough orders; join/query counts stay flat
+```
+
+All three strategies load the **same** order ids from `find({ take: N, order: { id: 'ASC' } })`.
+The naive path then loads items per order and the product per item. The fix uses
+`leftJoinAndSelect`. `relationLoadStrategy: 'query'` is the two-level query
+strategy from the assignment (1 + 2 × levels).
+
+| Strategy | SQL queries (N=8) |
+| --- | ---: |
+| naive (query in a loop) | 21 |
+| `leftJoinAndSelect` | 1 |
+| `relationLoadStrategy: 'query'` | 4 |
+
+21 ≥ N. The join fix is 1 and does not grow with N. The query strategy is a
+small constant (4, within `1 + 2 × 2 = 5` for two relation levels) and also
+independent of N.
+
+## Repository vs QueryBuilder
+
+`Repository.find()` is for loading an entity graph you already modeled:
+filters, relations, pagination. It is the default for “give me these orders
+with their items.” QueryBuilder is for reports: `JOIN` + `GROUP BY` +
+aggregates (`SUM`, `COUNT`) that do not map to a single entity. `npm run report`
+is revenue by `shipping_country` — `find()` cannot express that without loading
+every row into memory.
+
+## onDelete
+
+- `Order.user` and `OrderItem.product` use `RESTRICT`: deleting a user or a
+  product must not erase order history.
+- `OrderItem.order` and `IdempotencyRecord.order` use `CASCADE`: line items and
+  the idempotency row are owned by the order and go with it.
+
+Covering indexes (`INCLUDE`, `DESC`) are created only in the migration. On
+`Order` they are declared as `@Index('…', { synchronize: false })` so a later
+`migration:generate` does not emit a false DROP/CREATE.
+
+## Grading
+
+```bash
 docker compose up -d --wait
-docker compose exec -T db psql -U app -d marketplace -v ON_ERROR_STOP=1 -f - < db/schema.sql
-docker compose exec -T db psql -U app -d marketplace -v ON_ERROR_STOP=1 -f - < db/seed.sql
+export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=app DB_PASSWORD=marketplace_dev_password DB_NAME=marketplace
+export SKIP_VAULT=1    # у грейдера немає доступу до сховища
 ```
-
-Verify the schema and main-table volume:
-
-```bash
-docker compose exec -T db psql -U app -d marketplace -Atc "SELECT count(*) FROM information_schema.table_constraints WHERE constraint_type='FOREIGN KEY' AND table_schema='public';"
-docker compose exec -T db psql -U app -d marketplace -Atc "SELECT count(*) FROM orders;"
-```
-
-Expected output is at least `3` foreign keys and at least `100000` orders. This
-seed produces `4` foreign keys and `120000` orders.
-
-## Explain before indexes
-
-Run these commands after schema and seed, but before `db/indexes.sql`. Every
-plan contains `Seq Scan` or `Parallel Seq Scan`.
-
-```bash
-docker compose exec -T db psql -U app -d marketplace -c "EXPLAIN (ANALYZE, BUFFERS) $(cat db/queries/q1.sql)"
-docker compose exec -T db psql -U app -d marketplace -c "EXPLAIN (ANALYZE, BUFFERS) $(cat db/queries/q2.sql)"
-docker compose exec -T db psql -U app -d marketplace -c "EXPLAIN (ANALYZE, BUFFERS) $(cat db/queries/q3.sql)"
-```
-
-The queries represent:
-
-1. A user's order history for a date range.
-2. The pending-order fulfillment queue.
-3. Regional completed-order search.
-
-## Apply indexes and explain again
-
-```bash
-docker compose exec -T db psql -U app -d marketplace -v ON_ERROR_STOP=1 -f - < db/indexes.sql
-docker compose exec -T db psql -U app -d marketplace -c "ANALYZE;"
-docker compose exec -T db psql -U app -d marketplace -c "EXPLAIN (ANALYZE, BUFFERS) $(cat db/queries/q1.sql)"
-docker compose exec -T db psql -U app -d marketplace -c "EXPLAIN (ANALYZE, BUFFERS) $(cat db/queries/q2.sql)"
-docker compose exec -T db psql -U app -d marketplace -c "EXPLAIN (ANALYZE, BUFFERS) $(cat db/queries/q3.sql)"
-```
-
-All three plans now use `Index Scan` or `Index Only Scan` and contain no
-sequential scan. The measured plans and explanations are in
-[`db/OPTIMIZATIONS.md`](./db/OPTIMIZATIONS.md).
-
-Verify that PostgreSQL installed partial or expression indexes:
-
-```bash
-docker compose exec -T db psql -U app -d marketplace -Atc "SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND (indexdef ILIKE '% WHERE %' OR indexdef ~ '\((\w+)\(');"
-```
-
-Expected output: `1`.
-
-## Files
-
-- `db/schema.sql` — five domain tables, constraints, and four foreign keys.
-- `db/seed.sql` — skewed users/products/orders data and `VACUUM (ANALYZE)`.
-- `db/queries/q1.sql`–`q3.sql` — one API-shaped statement per file.
-- `db/indexes.sql` — three query-driven indexes, including a partial index
-  for the pending queue.
-- `db/OPTIMIZATIONS.md` — full before/after execution plans.
-- `docker-compose.yml` — PostgreSQL 17 grader stand.

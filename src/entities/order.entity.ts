@@ -23,15 +23,10 @@ export const ORDER_STATUSES = [
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
 @Entity({ name: 'orders' })
-@Index('idx_orders_user_created_at', ['user', 'createdAt'])
-@Index('idx_orders_pending_created_at', ['createdAt'], {
-  where: `"status" = 'pending'`,
-})
-@Index('idx_orders_country_status_created_at', [
-  'shippingCountry',
-  'status',
-  'createdAt',
-])
+// INCLUDE / DESC are not expressible in @Index; indexes live in the migration.
+@Index('idx_orders_user_created_at', { synchronize: false })
+@Index('idx_orders_pending_created_at', { synchronize: false })
+@Index('idx_orders_country_status_created_at', { synchronize: false })
 @Check(`"status" IN ('pending', 'completed', 'cancelled', 'refunded')`)
 @Check(`"total_cents" >= 0`)
 @Check(`"shipping_country" ~ '^[A-Z]{2}$'`)

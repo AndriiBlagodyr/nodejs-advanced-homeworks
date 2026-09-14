@@ -40,12 +40,19 @@ Expected: `users=8`, `products=8`, `orders=8`, `order_items=12`,
 
 ## N+1 (order → items → product)
 
-Measured by `npm run demo:nplus1` with `N = 8` orders. The naive path loads
-orders, then items per order, then the product per item. The fix uses
+Measured by `npm run demo:nplus1` (optional `N` via argv, default `8`):
+
+```bash
+npm run demo:nplus1 -- 8
+npm run demo:nplus1 -- 16   # after seeding enough orders; join/query counts stay flat
+```
+
+All three strategies load the **same** order ids from `find({ take: N, order: { id: 'ASC' } })`.
+The naive path then loads items per order and the product per item. The fix uses
 `leftJoinAndSelect`. `relationLoadStrategy: 'query'` is the two-level query
 strategy from the assignment (1 + 2 × levels).
 
-| Strategy | SQL queries |
+| Strategy | SQL queries (N=8) |
 | --- | ---: |
 | naive (query in a loop) | 21 |
 | `leftJoinAndSelect` | 1 |
@@ -70,6 +77,10 @@ every row into memory.
   product must not erase order history.
 - `OrderItem.order` and `IdempotencyRecord.order` use `CASCADE`: line items and
   the idempotency row are owned by the order and go with it.
+
+Covering indexes (`INCLUDE`, `DESC`) are created only in the migration. On
+`Order` they are declared as `@Index('…', { synchronize: false })` so a later
+`migration:generate` does not emit a false DROP/CREATE.
 
 ## Grading
 

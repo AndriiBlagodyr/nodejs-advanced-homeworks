@@ -2,27 +2,26 @@ import { DataSource } from 'typeorm';
 import { createDataSourceOptions } from './data-source';
 import { IdempotencyRecord, Order, OrderItem, Product, User } from './entities';
 
-const USERS: Array<Pick<User, 'id' | 'email' | 'fullName' | 'balanceCents'>> = [
-  { id: '1', email: 'ada@example.com', fullName: 'Ada Lovelace', balanceCents: 10_000_000 },
-  { id: '2', email: 'grace@example.com', fullName: 'Grace Hopper', balanceCents: 10_000_000 },
-  { id: '3', email: 'alan@example.com', fullName: 'Alan Turing', balanceCents: 10_000_000 },
-  { id: '4', email: 'barbara@example.com', fullName: 'Barbara Liskov', balanceCents: 10_000_000 },
-  { id: '5', email: 'donald@example.com', fullName: 'Donald Knuth', balanceCents: 10_000_000 },
-  { id: '6', email: 'frances@example.com', fullName: 'Frances Allen', balanceCents: 10_000_000 },
-  { id: '7', email: 'linus@example.com', fullName: 'Linus Torvalds', balanceCents: 10_000_000 },
-  { id: '8', email: 'margaret@example.com', fullName: 'Margaret Hamilton', balanceCents: 10_000_000 },
+const USERS: Array<Pick<User, 'id' | 'email' | 'fullName'>> = [
+  { id: '1', email: 'ada@example.com', fullName: 'Ada Lovelace' },
+  { id: '2', email: 'grace@example.com', fullName: 'Grace Hopper' },
+  { id: '3', email: 'alan@example.com', fullName: 'Alan Turing' },
+  { id: '4', email: 'barbara@example.com', fullName: 'Barbara Liskov' },
+  { id: '5', email: 'donald@example.com', fullName: 'Donald Knuth' },
+  { id: '6', email: 'frances@example.com', fullName: 'Frances Allen' },
+  { id: '7', email: 'linus@example.com', fullName: 'Linus Torvalds' },
+  { id: '8', email: 'margaret@example.com', fullName: 'Margaret Hamilton' },
 ];
 
-const PRODUCTS: Array<Pick<Product, 'id' | 'name' | 'priceCents' | 'stock' | 'isActive'>> = [
-  { id: '1', name: 'Mechanical Keyboard', priceCents: 12900, stock: 100, isActive: true },
-  { id: '2', name: 'USB-C Hub', priceCents: 4900, stock: 100, isActive: true },
-  { id: '3', name: 'Monitor Arm', priceCents: 8900, stock: 100, isActive: true },
-  { id: '4', name: 'Noise Cancelling Headphones', priceCents: 19900, stock: 100, isActive: true },
-  { id: '5', name: 'Laptop Stand', priceCents: 3900, stock: 100, isActive: true },
-  { id: '6', name: 'Wireless Mouse', priceCents: 5900, stock: 100, isActive: true },
-  { id: '7', name: 'Desk Mat', priceCents: 2500, stock: 100, isActive: true },
-  { id: '8', name: 'Webcam', priceCents: 7900, stock: 100, isActive: true },
-  { id: '9', name: 'Race Widget', priceCents: 100, stock: 10, isActive: true },
+const PRODUCTS: Array<Pick<Product, 'id' | 'name' | 'priceCents' | 'isActive'>> = [
+  { id: '1', name: 'Mechanical Keyboard', priceCents: 12900, isActive: true },
+  { id: '2', name: 'USB-C Hub', priceCents: 4900, isActive: true },
+  { id: '3', name: 'Monitor Arm', priceCents: 8900, isActive: true },
+  { id: '4', name: 'Noise Cancelling Headphones', priceCents: 19900, isActive: true },
+  { id: '5', name: 'Laptop Stand', priceCents: 3900, isActive: true },
+  { id: '6', name: 'Wireless Mouse', priceCents: 5900, isActive: true },
+  { id: '7', name: 'Desk Mat', priceCents: 2500, isActive: true },
+  { id: '8', name: 'Webcam', priceCents: 7900, isActive: true },
 ];
 
 const ORDERS: Array<
@@ -117,32 +116,24 @@ async function seed(): Promise<void> {
   try {
     for (const user of USERS) {
       await ds.query(
-        `INSERT INTO users (id, email, full_name, balance_cents)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO users (id, email, full_name)
+         VALUES ($1, $2, $3)
          ON CONFLICT (id) DO UPDATE SET
            email = EXCLUDED.email,
-           full_name = EXCLUDED.full_name,
-           balance_cents = EXCLUDED.balance_cents`,
-        [user.id, user.email, user.fullName, user.balanceCents],
+           full_name = EXCLUDED.full_name`,
+        [user.id, user.email, user.fullName],
       );
     }
 
     for (const product of PRODUCTS) {
       await ds.query(
-        `INSERT INTO products (id, name, price_cents, stock, is_active)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO products (id, name, price_cents, is_active)
+         VALUES ($1, $2, $3, $4)
          ON CONFLICT (id) DO UPDATE SET
            name = EXCLUDED.name,
            price_cents = EXCLUDED.price_cents,
-           stock = EXCLUDED.stock,
            is_active = EXCLUDED.is_active`,
-        [
-          product.id,
-          product.name,
-          product.priceCents,
-          product.stock,
-          product.isActive,
-        ],
+        [product.id, product.name, product.priceCents, product.isActive],
       );
     }
 

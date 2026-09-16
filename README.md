@@ -1,10 +1,11 @@
-# HW-13 — TypeORM data layer
+# HW-14 — Concurrent checkout & workers
 
-Marketplace schema from [HW-12](./hw-12) is now a TypeORM data layer: entities,
-relations, migrations (`synchronize: false`), an idempotent seed, an N+1 demo,
-and a QueryBuilder report. Connection settings come from `process.env`, which
-`scripts/with-secrets.sh` fills via Infisical. Previous homework snapshots live
-in `hw-03/`, `hw-05/`, `hw-09/`, `hw-11/`, and `hw-12/`.
+Transactional checkout on top of the TypeORM layer from
+[HW-13](./hw-13): stock decrement, balance debit, order insert, and a
+post-processing job — all in one transaction. Plus a `FOR UPDATE SKIP LOCKED`
+worker pool and a serialization-failure retry wrapper.
+
+Previous snapshots: `hw-03/`, `hw-05/`, `hw-09/`, `hw-11/`, `hw-12/`, `hw-13/`.
 
 ## Commands
 
@@ -12,80 +13,49 @@ in `hw-03/`, `hw-05/`, `hw-09/`, `hw-11/`, and `hw-12/`.
 npm ci
 npm run build
 npm run migrate
-npm run migrate:show
 npm run seed
-npm run demo:nplus1
-npm run report
+npm run demo:race
+npm run demo:workers
+npm run demo:retry
 ```
 
-`synchronize` is set to `false` in `src/data-source.ts`. Schema changes go
-through `src/migrations/` only.
+`synchronize` stays `false`. Schema changes go through `src/migrations/` only.
+DB scripts (including the three new demos) are wrapped with
+`bash scripts/with-secrets.sh dev …`.
 
-## Seed row counts
+## Конкурентність
 
-After `npm run seed` (and again after a second run) the counts stay:
+### Checkout protection
 
-```bash
-docker compose exec -T db psql -U app -d marketplace -c \
-  "SELECT
-     (SELECT count(*) FROM users) AS users,
-     (SELECT count(*) FROM products) AS products,
-     (SELECT count(*) FROM orders) AS orders,
-     (SELECT count(*) FROM order_items) AS order_items,
-     (SELECT count(*) FROM idempotency_records) AS idempotency_records;"
-```
+Checkout uses an **atomic** `UPDATE … SET stock = stock - $n WHERE … AND stock >= $n RETURNING`.
+Zero rows means “no stock” and there is no race window between check and write —
+unlike a JS read-modify-write or a separate `SELECT … FOR UPDATE` followed by an
+update in application code. Balance is decremented the same way. Any failure
+rolls the whole transaction back, so orphan orders cannot appear.
 
-Expected: `users=8`, `products=8`, `orders=8`, `order_items=12`,
-`idempotency_records=5`.
+### Numbers from local runs
 
-## N+1 (order → items → product)
+| Demo | Result |
+| --- | --- |
+| `demo:race` | 50 attempts, **10** successes, final stock **0**, negative stock rows **0** |
+| `demo:workers` | 20 jobs / 4 workers, **processed twice: 0**, elapsed ~319–480 ms vs sequential estimate 800 ms |
+| `demo:retry` | ≥ 1 caught `40001` (often ~20+ events), final balance `100 - 8 = 92` |
 
-Measured by `npm run demo:nplus1` (optional `N` via argv, default `8`):
-
-```bash
-npm run demo:nplus1 -- 8
-npm run demo:nplus1 -- 16   # after seeding enough orders; join/query counts stay flat
-```
-
-All three strategies load the **same** order ids from `find({ take: N, order: { id: 'ASC' } })`.
-The naive path then loads items per order and the product per item. The fix uses
-`leftJoinAndSelect`. `relationLoadStrategy: 'query'` is the two-level query
-strategy from the assignment (1 + 2 × levels).
-
-| Strategy | SQL queries (N=8) |
-| --- | ---: |
-| naive (query in a loop) | 21 |
-| `leftJoinAndSelect` | 1 |
-| `relationLoadStrategy: 'query'` | 4 |
-
-21 ≥ N. The join fix is 1 and does not grow with N. The query strategy is a
-small constant (4, within `1 + 2 × 2 = 5` for two relation levels) and also
-independent of N.
-
-## Repository vs QueryBuilder
-
-`Repository.find()` is for loading an entity graph you already modeled:
-filters, relations, pagination. It is the default for “give me these orders
-with their items.” QueryBuilder is for reports: `JOIN` + `GROUP BY` +
-aggregates (`SUM`, `COUNT`) that do not map to a single entity. `npm run report`
-is revenue by `shipping_country` — `find()` cannot express that without loading
-every row into memory.
-
-## onDelete
-
-- `Order.user` and `OrderItem.product` use `RESTRICT`: deleting a user or a
-  product must not erase order history.
-- `OrderItem.order` and `IdempotencyRecord.order` use `CASCADE`: line items and
-  the idempotency row are owned by the order and go with it.
-
-Covering indexes (`INCLUDE`, `DESC`) are created only in the migration. On
-`Order` they are declared as `@Index('…', { synchronize: false })` so a later
-`migration:generate` does not emit a false DROP/CREATE.
+Retry catches **only** Postgres `40001` (serialization_failure) and `40P01`
+(deadlock_detected). Other errors (check violations, insufficient stock, bugs)
+must surface immediately — blind retries would hide real failures or amplify
+them. The whole transaction (including the reads) is re-run from scratch.
 
 ## Grading
 
 ```bash
 docker compose up -d --wait
 export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=app DB_PASSWORD=marketplace_dev_password DB_NAME=marketplace
+export DATABASE_URL=postgres://app:marketplace_dev_password@127.0.0.1:5432/marketplace
 export SKIP_VAULT=1    # у грейдера немає доступу до сховища
+
+npm ci
+npm run build
+npm run migrate
+npm run seed
 ```

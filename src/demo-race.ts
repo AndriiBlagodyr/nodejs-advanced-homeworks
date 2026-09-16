@@ -1,23 +1,25 @@
 import { DataSource } from 'typeorm';
 import { checkout, InsufficientStockError } from './checkout';
 import { createDataSourceOptions } from './data-source';
+import { returningRows } from './db-result';
 
 const ATTEMPTS = 50;
 const INITIAL_STOCK = 10;
-const RACE_PRODUCT_ID = '9';
 const QTY = 1;
 
-async function prepare(ds: DataSource): Promise<void> {
-  await ds.query(
-    `INSERT INTO products (id, name, price_cents, stock, is_active)
-     VALUES ($1, 'Race Widget', 100, $2, true)
-     ON CONFLICT (id) DO UPDATE SET
-       name = EXCLUDED.name,
-       price_cents = EXCLUDED.price_cents,
-       stock = EXCLUDED.stock,
-       is_active = true`,
-    [RACE_PRODUCT_ID, INITIAL_STOCK],
+type IdRow = { id: string };
+
+async function prepare(ds: DataSource): Promise<string> {
+  // Insert a fresh race product without a fixed id so we never collide with seed data.
+  const productRows = returningRows<IdRow>(
+    await ds.query(
+      `INSERT INTO products (name, price_cents, stock, is_active)
+       VALUES ('Race Widget', 100, $1, true)
+       RETURNING id`,
+      [INITIAL_STOCK],
+    ),
   );
+  const raceProductId = String(productRows[0].id);
 
   // Buyers with deliberately oversized balances — stock is the only limit.
   for (let i = 1; i <= ATTEMPTS; i += 1) {
@@ -41,10 +43,8 @@ async function prepare(ds: DataSource): Promise<void> {
     `SELECT setval(pg_get_serial_sequence('users', 'id'),
             COALESCE((SELECT MAX(id) FROM users), 1))`,
   );
-  await ds.query(
-    `SELECT setval(pg_get_serial_sequence('products', 'id'),
-            COALESCE((SELECT MAX(id) FROM products), 1))`,
-  );
+
+  return raceProductId;
 }
 
 async function main(): Promise<void> {
@@ -56,7 +56,7 @@ async function main(): Promise<void> {
   await ds.initialize();
 
   try {
-    await prepare(ds);
+    const raceProductId = await prepare(ds);
 
     const results = await Promise.all(
       Array.from({ length: ATTEMPTS }, (_, index) =>
@@ -64,7 +64,7 @@ async function main(): Promise<void> {
           .transaction((manager) =>
             checkout(manager, {
               userId: String(1000 + index + 1),
-              productId: RACE_PRODUCT_ID,
+              productId: raceProductId,
               quantity: QTY,
             }),
           )
@@ -81,7 +81,7 @@ async function main(): Promise<void> {
     const successes = results.filter((r) => r.ok).length;
     const stockRows: Array<{ stock: number }> = await ds.query(
       `SELECT stock FROM products WHERE id = $1`,
-      [RACE_PRODUCT_ID],
+      [raceProductId],
     );
     const finalStock = Number(stockRows[0]?.stock);
     const negativeRows: Array<{ count: string }> = await ds.query(

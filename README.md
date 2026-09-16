@@ -53,4 +53,9 @@ docker compose up -d --wait
 export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=app DB_PASSWORD=marketplace_dev_password DB_NAME=marketplace
 export DATABASE_URL=postgres://app:marketplace_dev_password@127.0.0.1:5432/marketplace
 export SKIP_VAULT=1    # у грейдера немає доступу до сховища
+
+npm ci
+npm run build
+npm run migrate
+npm run seed
 ```

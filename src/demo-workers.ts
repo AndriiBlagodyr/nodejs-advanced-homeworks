@@ -7,8 +7,8 @@ const WORKER_COUNT = 4;
 const WORK_MS = 40;
 
 async function seedJobs(ds: DataSource): Promise<void> {
-  // Drop leftovers from checkout / prior runs so only this demo's jobs remain.
-  await ds.query(`DELETE FROM jobs`);
+  // Only drop leftovers from prior worker-demo runs; keep checkout receipts intact.
+  await ds.query(`DELETE FROM jobs WHERE payload->>'demo' = 'workers'`);
 
   for (let i = 0; i < JOB_COUNT; i += 1) {
     await ds.query(

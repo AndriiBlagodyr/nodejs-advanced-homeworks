@@ -22,7 +22,6 @@ const PRODUCTS: Array<Pick<Product, 'id' | 'name' | 'priceCents' | 'stock' | 'is
   { id: '6', name: 'Wireless Mouse', priceCents: 5900, stock: 100, isActive: true },
   { id: '7', name: 'Desk Mat', priceCents: 2500, stock: 100, isActive: true },
   { id: '8', name: 'Webcam', priceCents: 7900, stock: 100, isActive: true },
-  { id: '9', name: 'Race Widget', priceCents: 100, stock: 10, isActive: true },
 ];
 
 const ORDERS: Array<

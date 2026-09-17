@@ -12,3 +12,4 @@ secrets/*
 dist/
 coverage/
 *.tsbuildinfo
+backups/

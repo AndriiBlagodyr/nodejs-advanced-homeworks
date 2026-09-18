@@ -10,7 +10,6 @@ if [ -z "${DATABASE_URL:-}" ]; then
 fi
 
 # Parse DATABASE_URL — postgres://user:pass@host:port/dbname
-PROTO="${DATABASE_URL%%://*}"
 REST="${DATABASE_URL#*://}"
 USERPASS="${REST%%@*}"
 HOSTPORTDB="${REST#*@}"
@@ -20,6 +19,10 @@ HOSTPORT="${HOSTPORTDB%%/*}"
 PG_DB="${HOSTPORTDB#*/}"
 PG_HOST="${HOSTPORT%%:*}"
 PG_PORT="${HOSTPORT#*:}"
+
+# Bypass PgBouncer — connect to Postgres directly.
+# DATABASE_URL points at PgBouncer (5432); Postgres listens on DIRECT_PG_PORT.
+DIRECT_PG_PORT="${DIRECT_PG_PORT:-5433}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKUP_DIR="$ROOT/backups"
@@ -33,10 +36,21 @@ export PGPASSWORD="$PG_PASS"
 echo "Creating backup: $BACKUP_FILE"
 pg_dump -Fc \
   -h "$PG_HOST" \
-  -p "$PG_PORT" \
+  -p "$DIRECT_PG_PORT" \
   -U "$PG_USER" \
   -d "$PG_DB" \
   -f "$BACKUP_FILE"
+
+# Save control checksum as sidecar for the restore-drill
+CONTROL=$(psql -h "$PG_HOST" -p "$DIRECT_PG_PORT" -U "$PG_USER" -d "$PG_DB" -Atc \
+  "SELECT count(*) || '|' || COALESCE(sum(total_cents), 0) FROM orders")
+echo "$CONTROL" > "${BACKUP_FILE}.checksum"
+
+# Rotate: keep only the 7 most recent dumps (+ their sidecars)
+cd "$BACKUP_DIR"
+ls -t *.dump 2>/dev/null | tail -n +8 | while read -r OLD; do
+  rm -f "$OLD" "${OLD}.checksum"
+done
 
 SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
 echo "Backup complete: $BACKUP_FILE ($SIZE)"

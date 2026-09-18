@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Restore-drill: takes the latest backup, restores into a fresh container,
-# compares control values, prints MATCH or exits non-zero.
+# compares control values from the sidecar checksum, prints MATCH or exits non-zero.
 
 if [ -z "${DATABASE_URL:-}" ]; then
   echo "DATABASE_URL: unbound variable" >&2
@@ -17,10 +17,6 @@ PG_USER="${USERPASS%%:*}"
 PG_PASS="${USERPASS#*:}"
 HOSTPORT="${HOSTPORTDB%%/*}"
 PG_DB="${HOSTPORTDB#*/}"
-# Source Postgres host — direct, not via PgBouncer
-SRC_HOST="${HOSTPORT%%:*}"
-# For control query we go through whatever DATABASE_URL points to
-SRC_PORT="${HOSTPORT#*:}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKUP_DIR="$ROOT/backups"
@@ -35,12 +31,21 @@ echo "Restoring from: $LATEST"
 
 export PGPASSWORD="$PG_PASS"
 
-# Control values BEFORE restore (from the live database — via PgBouncer or direct)
-CONTROL_BEFORE=$(psql -h "$SRC_HOST" -p "$SRC_PORT" -U "$PG_USER" -d "$PG_DB" -Atc \
-  "SELECT count(*) || '|' || COALESCE(sum(total_cents), 0) FROM orders")
-echo "Control before: $CONTROL_BEFORE"
+# Control value from the sidecar written by backup.sh at dump time.
+# Falls back to live DB query if sidecar is missing (first-time compat).
+CHECKSUM_FILE="${LATEST}.checksum"
+if [ -f "$CHECKSUM_FILE" ]; then
+  CONTROL_BEFORE=$(cat "$CHECKSUM_FILE")
+  echo "Control before (sidecar): $CONTROL_BEFORE"
+else
+  SRC_HOST="${HOSTPORT%%:*}"
+  SRC_PORT="${HOSTPORT#*:}"
+  CONTROL_BEFORE=$(psql -h "$SRC_HOST" -p "$SRC_PORT" -U "$PG_USER" -d "$PG_DB" -Atc \
+    "SELECT count(*) || '|' || COALESCE(sum(total_cents), 0) FROM orders")
+  echo "Control before (live DB): $CONTROL_BEFORE"
+fi
 
-# Drill container/volume names
+# Drill container/volume names (PID-scoped for parallel safety)
 DRILL_CONTAINER="marketplace-drill-$$"
 DRILL_VOLUME="marketplace_drill_data_$$"
 
@@ -51,7 +56,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Create fresh volume + Postgres container
+# Create fresh volume + Postgres container with a random host port
 docker volume create "$DRILL_VOLUME" >/dev/null
 docker run -d \
   --name "$DRILL_CONTAINER" \
@@ -59,8 +64,12 @@ docker run -d \
   -e POSTGRES_PASSWORD="$PG_PASS" \
   -e POSTGRES_DB="$PG_DB" \
   -v "$DRILL_VOLUME":/var/lib/postgresql/data \
-  -p 15432:5432 \
+  -p 127.0.0.1:0:5432 \
   postgres:17-alpine >/dev/null
+
+# Read the dynamically assigned port
+DRILL_PORT=$(docker port "$DRILL_CONTAINER" 5432 | head -1 | sed 's/.*://')
+echo "Drill Postgres on port: $DRILL_PORT"
 
 echo "Waiting for drill Postgres..."
 RETRIES=30
@@ -77,7 +86,7 @@ done
 START_TIME=$(date +%s)
 pg_restore --no-owner -Fc \
   -h 127.0.0.1 \
-  -p 15432 \
+  -p "$DRILL_PORT" \
   -U "$PG_USER" \
   -d "$PG_DB" \
   "$LATEST"
@@ -85,7 +94,7 @@ END_TIME=$(date +%s)
 RESTORE_SECONDS=$((END_TIME - START_TIME))
 
 # Control values AFTER restore
-CONTROL_AFTER=$(psql -h 127.0.0.1 -p 15432 -U "$PG_USER" -d "$PG_DB" -Atc \
+CONTROL_AFTER=$(psql -h 127.0.0.1 -p "$DRILL_PORT" -U "$PG_USER" -d "$PG_DB" -Atc \
   "SELECT count(*) || '|' || COALESCE(sum(total_cents), 0) FROM orders")
 echo "Control after:  $CONTROL_AFTER"
 echo "Restore time:   ${RESTORE_SECONDS}s"

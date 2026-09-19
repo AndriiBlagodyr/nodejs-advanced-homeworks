@@ -1,0 +1,29 @@
+{
+  "name": "marketplace-orm",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "migrate": "bash scripts/with-secrets.sh dev node ./node_modules/typeorm/cli.js migration:run -d dist/data-source.js",
+    "migrate:show": "bash scripts/with-secrets.sh dev node ./node_modules/typeorm/cli.js migration:show -d dist/data-source.js",
+    "migrate:revert": "bash scripts/with-secrets.sh dev node ./node_modules/typeorm/cli.js migration:revert -d dist/data-source.js",
+    "seed": "bash scripts/with-secrets.sh dev node dist/seed.js",
+    "demo:nplus1": "bash scripts/with-secrets.sh dev node dist/demo-nplus1.js",
+    "demo:race": "bash scripts/with-secrets.sh dev node dist/demo-race.js",
+    "demo:workers": "bash scripts/with-secrets.sh dev node dist/demo-workers.js",
+    "demo:retry": "bash scripts/with-secrets.sh dev node dist/demo-retry.js",
+    "report": "bash scripts/with-secrets.sh dev node dist/report.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "pg": "^8.16.3",
+    "reflect-metadata": "^0.2.2",
+    "typeorm": "^0.3.27"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "typescript": "^5.9.2"
+  }
+}

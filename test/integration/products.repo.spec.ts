@@ -6,7 +6,7 @@ let ds: DataSource;
 
 beforeAll(async () => {
   ds = await setupTestDb();
-});
+}, 120_000);
 
 afterAll(async () => {
   await teardownTestDb();

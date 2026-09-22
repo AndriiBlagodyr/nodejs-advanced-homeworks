@@ -70,16 +70,12 @@ async function run(): Promise<void> {
         await seedState(seedDs);
       },
     },
-    // Always verify from local pact file
-    pactUrls: [
-      path.resolve(process.cwd(), 'pacts', 'MarketplaceFrontend-MarketplaceAPI.json'),
-    ],
   };
 
-  // Publish verification results to broker if URL is provided
   if (brokerUrl) {
-    opts.publishVerificationResult = true;
     opts.pactBrokerUrl = brokerUrl;
+    opts.publishVerificationResult = true;
+    opts.consumerVersionSelectors = [{ latest: true }];
     if (process.env.PACT_BROKER_TOKEN) {
       opts.pactBrokerToken = process.env.PACT_BROKER_TOKEN;
     }
@@ -87,6 +83,10 @@ async function run(): Promise<void> {
       opts.pactBrokerUsername = process.env.PACT_BROKER_USERNAME ?? 'pact';
       opts.pactBrokerPassword = process.env.PACT_BROKER_PASSWORD ?? 'pact';
     }
+  } else {
+    opts.pactUrls = [
+      path.resolve(process.cwd(), 'pacts', 'MarketplaceFrontend-MarketplaceAPI.json'),
+    ];
   }
 
   try {

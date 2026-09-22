@@ -3,17 +3,14 @@
     "target": "ES2022",
     "module": "commonjs",
     "outDir": "dist",
-    "rootDir": ".",
+    "rootDir": "src",
     "strict": true,
     "strictPropertyInitialization": false,
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "sourceMap": true,
-    "declaration": true,
-    "resolveJsonModule": true
+    "sourceMap": true
   },
-  "include": ["src", "test"],
-  "exclude": ["dist", "node_modules", "hw-*", "pacts"]
+  "include": ["src"]
 }

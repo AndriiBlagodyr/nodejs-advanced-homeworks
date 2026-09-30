@@ -6,12 +6,10 @@ import { Product } from '../entities/product.entity';
 import { User } from '../entities/user.entity';
 import { OrdersService } from './orders.service';
 import { OrdersController } from './orders.controller';
-import { OrderEventsService } from './order-events.service';
-import { OrdersGateway } from './orders.gateway';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Order, OrderItem, Product, User])],
-  providers: [OrdersService, OrderEventsService, OrdersGateway],
+  providers: [OrdersService],
   controllers: [OrdersController],
 })
 export class OrdersModule {}

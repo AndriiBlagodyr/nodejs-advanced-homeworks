@@ -1,11 +1,10 @@
-import { Injectable, NotFoundException, BadRequestException, UnauthorizedException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, MoreThan } from 'typeorm';
-import { Order, type OrderStatus } from '../entities/order.entity';
+import { Order } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
 import { Product } from '../entities/product.entity';
 import { User } from '../entities/user.entity';
-import { OrderEventsService } from './order-events.service';
 
 export interface OrderItemInput {
   product_id: number;
@@ -38,7 +37,6 @@ export class OrdersService {
     @InjectRepository(Product) private readonly productRepo: Repository<Product>,
     @InjectRepository(User) private readonly userRepo: Repository<User>,
     private readonly dataSource: DataSource,
-    private readonly orderEvents: OrderEventsService,
   ) {}
 
   private toResponse(order: Order): OrderResponse {
@@ -79,28 +77,6 @@ export class OrdersService {
     };
   }
 
-  async findEntity(id: number): Promise<Order> {
-    const order = await this.orderRepo.findOne({
-      where: { id: String(id) } as any,
-    });
-    if (!order) throw new NotFoundException(`Order ${id} not found`);
-    return order;
-  }
-
-  /**
-   * Shared owner gate for WS join and SSE — runs before any event bus access.
-   */
-  async requireOwner(orderId: number, userId: string | undefined | null): Promise<Order> {
-    if (!userId) {
-      throw new UnauthorizedException('unauthorized');
-    }
-    const order = await this.findEntity(orderId);
-    if (String(order.userId) !== String(userId)) {
-      throw new ForbiddenException('forbidden');
-    }
-    return order;
-  }
-
   async findOne(id: number): Promise<OrderResponse> {
     const order = await this.orderRepo.findOne({
       where: { id: String(id) } as any,
@@ -108,18 +84,6 @@ export class OrdersService {
     });
     if (!order) throw new NotFoundException(`Order ${id} not found`);
     return this.toResponse(order);
-  }
-
-  async updateStatus(id: number, status: OrderStatus): Promise<OrderResponse> {
-    const order = await this.findEntity(id);
-    order.status = status;
-    const saved = await this.orderRepo.save(order);
-    this.orderEvents.publish(Number(saved.id), saved.status);
-    const withItems = await this.orderRepo.findOne({
-      where: { id: saved.id } as any,
-      relations: ['items'],
-    });
-    return this.toResponse(withItems ?? saved);
   }
 
   async create(

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, UnauthorizedException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, MoreThan } from 'typeorm';
 import { Order, type OrderStatus } from '../entities/order.entity';
@@ -84,6 +84,20 @@ export class OrdersService {
       where: { id: String(id) } as any,
     });
     if (!order) throw new NotFoundException(`Order ${id} not found`);
+    return order;
+  }
+
+  /**
+   * Shared owner gate for WS join and SSE — runs before any event bus access.
+   */
+  async requireOwner(orderId: number, userId: string | undefined | null): Promise<Order> {
+    if (!userId) {
+      throw new UnauthorizedException('unauthorized');
+    }
+    const order = await this.findEntity(orderId);
+    if (String(order.userId) !== String(userId)) {
+      throw new ForbiddenException('forbidden');
+    }
     return order;
   }
 

@@ -32,10 +32,10 @@ curl -s -X PATCH http://127.0.0.1:3000/orders/1/status \
   -d '{"status":"cancelled"}'
 ```
 
-SSE:
+SSE (owner required — same gate as WS `join`; query `userId` or `X-User-Id`):
 
 ```bash
-curl -sN --max-time 5 http://127.0.0.1:3000/orders/1/events
+curl -sN --max-time 5 'http://127.0.0.1:3000/orders/1/events?userId=1'
 ```
 
 Room isolation demo (two Socket.IO clients):
@@ -82,8 +82,8 @@ npm start
 In another terminal (app already listening on :3000):
 
 ```bash
-# SSE header
-curl -sN --max-time 2 -D - -o /dev/null http://127.0.0.1:3000/orders/1/events | grep -i '^content-type'
+# SSE header (order 1 belongs to user 1)
+curl -sN --max-time 2 -D - -o /dev/null 'http://127.0.0.1:3000/orders/1/events?userId=1' | grep -i '^content-type'
 
 # Isolation — different rooms
 node scripts/realtime-demo.mjs; echo "exit=$?"

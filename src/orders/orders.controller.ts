@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpException,
   Param,
   ParseIntPipe,
   Patch,
@@ -39,7 +40,16 @@ export class OrdersController {
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
-    await this.orders.findEntity(id);
+    const userId = sseUserId(req);
+    try {
+      await this.orders.requireOwner(id, userId);
+    } catch (err) {
+      if (err instanceof HttpException) {
+        res.status(err.getStatus()).json(err.getResponse());
+        return;
+      }
+      throw err;
+    }
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -48,10 +58,15 @@ export class OrdersController {
     });
     res.write('retry: 1000\n\n');
 
-    const lastEventId = Number(req.headers['last-event-id'] ?? 0);
-    const replayFrom = Number.isFinite(lastEventId) ? lastEventId : 0;
-    for (const event of this.orderEvents.historyAfter(id, replayFrom)) {
-      writeSse(res, event);
+    const rawLastId = req.headers['last-event-id'];
+    const lastEventHeader = Array.isArray(rawLastId) ? rawLastId[0] : rawLastId;
+    if (lastEventHeader !== undefined && lastEventHeader !== '') {
+      const lastEventId = Number(lastEventHeader);
+      if (Number.isFinite(lastEventId)) {
+        for (const event of this.orderEvents.historyAfter(id, lastEventId)) {
+          writeSse(res, event);
+        }
+      }
     }
 
     const sub: Subscription = this.orderEvents.stream(id).subscribe((event) => {
@@ -89,6 +104,18 @@ export class OrdersController {
     res.setHeader('Location', `/orders/${order.id}`);
     return order;
   }
+}
+
+function sseUserId(req: Request): string | undefined {
+  const fromQuery = req.query.userId;
+  if (typeof fromQuery === 'string' && fromQuery.length > 0) {
+    return fromQuery;
+  }
+  const fromHeader = req.headers['x-user-id'];
+  if (typeof fromHeader === 'string' && fromHeader.length > 0) {
+    return fromHeader;
+  }
+  return undefined;
 }
 
 function writeSse(res: Response, event: OrderStatusEvent): void {

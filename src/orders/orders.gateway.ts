@@ -1,4 +1,10 @@
-import { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  ForbiddenException,
+  NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
+  UnauthorizedException,
+} from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
@@ -42,16 +48,23 @@ export class OrdersGateway implements OnModuleInit, OnModuleDestroy {
       client.handshake.auth?.userId ?? client.handshake.query?.userId ?? '',
     );
     const orderId = Number(body?.orderId);
-    if (!userId) {
-      return { ok: false, error: 'unauthorized' };
-    }
     if (!Number.isInteger(orderId) || orderId < 1) {
       return { ok: false, error: 'invalid_order' };
     }
 
-    const order = await this.orders.findEntity(orderId);
-    if (String(order.userId) !== userId) {
-      return { ok: false, error: 'forbidden' };
+    try {
+      await this.orders.requireOwner(orderId, userId || undefined);
+    } catch (err) {
+      if (err instanceof UnauthorizedException) {
+        return { ok: false, error: 'unauthorized' };
+      }
+      if (err instanceof ForbiddenException) {
+        return { ok: false, error: 'forbidden' };
+      }
+      if (err instanceof NotFoundException) {
+        return { ok: false, error: 'not_found' };
+      }
+      throw err;
     }
 
     const room = `orders:${orderId}`;

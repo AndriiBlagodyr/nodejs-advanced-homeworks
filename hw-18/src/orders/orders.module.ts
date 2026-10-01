@@ -8,11 +8,10 @@ import { OrdersService } from './orders.service';
 import { OrdersController } from './orders.controller';
 import { OrderEventsService } from './order-events.service';
 import { OrdersGateway } from './orders.gateway';
-import { OrderPlacedPublisher } from '../broker/order-placed.publisher';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Order, OrderItem, Product, User])],
-  providers: [OrdersService, OrderEventsService, OrdersGateway, OrderPlacedPublisher],
+  providers: [OrdersService, OrderEventsService, OrdersGateway],
   controllers: [OrdersController],
 })
 export class OrdersModule {}

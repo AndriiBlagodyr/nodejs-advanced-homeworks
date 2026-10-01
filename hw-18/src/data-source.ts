@@ -5,13 +5,11 @@ import {
   Job,
   Order,
   OrderItem,
-  ProcessedEvent,
   Product,
   User,
 } from './entities';
 import { InitialSchema1726000000000 } from './migrations/1726000000000-InitialSchema';
 import { AddCheckoutAndJobs1726100000000 } from './migrations/1726100000000-AddCheckoutAndJobs';
-import { ProcessedEvents1726200000000 } from './migrations/1726200000000-ProcessedEvents';
 
 function postgresConnection(): Record<string, string | number | undefined> {
   if (process.env.DB_URL || process.env.DATABASE_URL) {
@@ -35,11 +33,10 @@ export function createDataSourceOptions(
     ...postgresConnection(),
     synchronize: false,
     logging: false,
-    entities: [User, Product, Order, OrderItem, IdempotencyRecord, Job, ProcessedEvent],
+    entities: [User, Product, Order, OrderItem, IdempotencyRecord, Job],
     migrations: [
       InitialSchema1726000000000,
       AddCheckoutAndJobs1726100000000,
-      ProcessedEvents1726200000000,
     ],
     ...overrides,
   } as DataSourceOptions;

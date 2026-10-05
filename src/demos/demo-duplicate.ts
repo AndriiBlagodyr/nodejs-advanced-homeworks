@@ -5,10 +5,13 @@ import { publishOrderPlaced } from '../broker/publisher';
 
 async function main(): Promise<void> {
   const result = await withDemoInfra(async ({ db, ch }) => {
+    let deliveriesSeen = 0;
     const consume = consumeUntil(ch, {
       db,
-      afterEffect: (_msg, _applied, redelivered) =>
-        redelivered ? 'ack' : 'nack-requeue',
+      afterEffect: () => {
+        deliveriesSeen += 1;
+        return deliveriesSeen === 1 ? 'nack-requeue' : 'ack';
+      },
       stop: (s) => s.delivered >= 2 && s.acked >= 1 && s.effect === 1,
       timeoutMs: 20_000,
     });

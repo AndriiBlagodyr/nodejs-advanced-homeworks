@@ -40,7 +40,13 @@ export async function consumeUntil(
     QUEUE_ORDER_PLACED,
     (msg) => {
       if (!msg) return;
-      void handle(ch, opts, stats, msg);
+      void handle(ch, opts, stats, msg).catch(() => {
+        try {
+          ch.nack(msg, false, false);
+        } catch {
+          /* already settled or channel closed */
+        }
+      });
     },
     { noAck: false },
   );
@@ -63,32 +69,36 @@ async function handle(
   stats: ConsumeStats,
   msg: ConsumeMessage,
 ): Promise<void> {
-  stats.delivered += 1;
-  const eventId = parseEventId(msg);
-  if (!eventId) {
-    const action = opts.onPoison?.(msg) ?? 'reject';
-    if (action === 'ack') {
-      ch.ack(msg);
-      stats.acked += 1;
-    } else if (action === 'nack-requeue') {
+  try {
+    stats.delivered += 1;
+    const eventId = parseEventId(msg);
+    if (!eventId) {
+      const action = opts.onPoison?.(msg) ?? 'reject';
+      if (action === 'ack') {
+        ch.ack(msg);
+        stats.acked += 1;
+      } else if (action === 'nack-requeue') {
+        ch.nack(msg, false, true);
+      } else {
+        ch.reject(msg, false);
+        stats.rejected += 1;
+      }
+      return;
+    }
+
+    const applied = await applyOrderPlacedEffect(opts.db, eventId);
+    if (applied) stats.effect += 1;
+    else stats.skipped += 1;
+    const ackAction =
+      opts.afterEffect?.(msg, applied, Boolean(msg.fields.redelivered)) ?? 'ack';
+    if (ackAction === 'nack-requeue') {
       ch.nack(msg, false, true);
     } else {
-      ch.reject(msg, false);
-      stats.rejected += 1;
+      ch.ack(msg);
+      stats.acked += 1;
     }
-    return;
-  }
-
-  const applied = await applyOrderPlacedEffect(opts.db, eventId);
-  if (applied) stats.effect += 1;
-  else stats.skipped += 1;
-  const ackAction =
-    opts.afterEffect?.(msg, applied, Boolean(msg.fields.redelivered)) ?? 'ack';
-  if (ackAction === 'nack-requeue') {
-    ch.nack(msg, false, true);
-  } else {
-    ch.ack(msg);
-    stats.acked += 1;
+  } catch {
+    ch.nack(msg, false, false);
   }
 }
 

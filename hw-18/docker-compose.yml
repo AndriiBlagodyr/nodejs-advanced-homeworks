@@ -63,20 +63,6 @@ services:
       timeout: 5s
       retries: 20
 
-  rabbitmq:
-    image: rabbitmq:4.2-management
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    environment:
-      RABBITMQ_DEFAULT_USER: app
-      RABBITMQ_DEFAULT_PASS: app
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
-      interval: 5s
-      timeout: 10s
-      retries: 20
-
 volumes:
   postgres_data:
   pact_db_data:

@@ -1,0 +1,2 @@
+# Marketplace database backup — runs nightly at 02:00
+0 2 * * * cd /opt/marketplace && bash scripts/with-secrets.sh dev bash scripts/backup.sh >> /var/log/marketplace-backup.log 2>&1

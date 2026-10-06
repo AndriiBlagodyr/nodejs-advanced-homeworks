@@ -6,8 +6,6 @@ import { OrderItem } from '../entities/order-item.entity';
 import { Product } from '../entities/product.entity';
 import { User } from '../entities/user.entity';
 import { OrderEventsService } from './order-events.service';
-import { OrderPlacedPublisher } from '../broker/order-placed.publisher';
-import { orderPlacedEvent } from '../broker/order-placed.event';
 
 export interface OrderItemInput {
   product_id: number;
@@ -41,7 +39,6 @@ export class OrdersService {
     @InjectRepository(User) private readonly userRepo: Repository<User>,
     private readonly dataSource: DataSource,
     private readonly orderEvents: OrderEventsService,
-    private readonly orderPlacedPublisher: OrderPlacedPublisher,
   ) {}
 
   private toResponse(order: Order): OrderResponse {
@@ -192,15 +189,6 @@ export class OrdersService {
 
       saved.items = items;
       return this.toResponse(saved);
-    }).then(async (created) => {
-      await this.orderPlacedPublisher.publish(
-        orderPlacedEvent({
-          orderId: String(created.id),
-          userId,
-          totalCents: created.total_cents,
-        }),
-      );
-      return created;
     });
   }
 }

@@ -1,13 +1,11 @@
-import { Injectable, NotFoundException, BadRequestException, UnauthorizedException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, UnauthorizedException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, MoreThan } from 'typeorm';
 import { Order, type OrderStatus } from '../entities/order.entity';
-import { OrderItem } from '../entities/order-item.entity';
 import { Product } from '../entities/product.entity';
 import { User } from '../entities/user.entity';
 import { OrderEventsService } from './order-events.service';
-import { OrderPlacedPublisher } from '../broker/order-placed.publisher';
-import { orderPlacedEvent } from '../broker/order-placed.event';
+import { placeOrder, type PlaceOrderResult } from './place-order';
 
 export interface OrderItemInput {
   product_id: number;
@@ -41,7 +39,6 @@ export class OrdersService {
     @InjectRepository(User) private readonly userRepo: Repository<User>,
     private readonly dataSource: DataSource,
     private readonly orderEvents: OrderEventsService,
-    private readonly orderPlacedPublisher: OrderPlacedPublisher,
   ) {}
 
   private toResponse(order: Order): OrderResponse {
@@ -125,82 +122,20 @@ export class OrdersService {
     return this.toResponse(withItems ?? saved);
   }
 
-  async create(
+  create(
     orderItems: OrderItemInput[],
     userId: string,
+    idempotencyKey?: string,
     shippingCountry = 'US',
-  ): Promise<OrderResponse> {
-    return this.dataSource.transaction(async (manager) => {
-      let totalCents = 0;
-      const itemsData: Array<{
-        productId: string;
-        quantity: number;
-        unitPriceCents: number;
-        lineTotalCents: number;
-      }> = [];
-
-      for (const item of orderItems) {
-        const product = await manager.findOne(Product, {
-          where: { id: String(item.product_id) } as any,
-        });
-        if (!product) {
-          throw new NotFoundException(`Product ${item.product_id} not found`);
-        }
-        if (product.stock < item.quantity) {
-          throw new BadRequestException(
-            `Insufficient stock for product ${item.product_id}`,
-          );
-        }
-
-        const lineTotalCents = product.priceCents * item.quantity;
-        totalCents += lineTotalCents;
-
-        await manager.decrement(
-          Product,
-          { id: product.id } as any,
-          'stock',
-          item.quantity,
-        );
-
-        itemsData.push({
-          productId: product.id,
-          quantity: item.quantity,
-          unitPriceCents: product.priceCents,
-          lineTotalCents,
-        });
-      }
-
-      const order = manager.create(Order, {
-        userId,
-        status: 'completed' as const,
-        totalCents,
-        shippingCountry,
-      });
-      const saved = await manager.save(Order, order);
-
-      const items: OrderItem[] = [];
-      for (const d of itemsData) {
-        const oi = manager.create(OrderItem, {
-          orderId: saved.id,
-          productId: d.productId,
-          quantity: d.quantity,
-          unitPriceCents: d.unitPriceCents,
-          lineTotalCents: d.lineTotalCents,
-        });
-        items.push(await manager.save(OrderItem, oi));
-      }
-
-      saved.items = items;
-      return this.toResponse(saved);
-    }).then(async (created) => {
-      await this.orderPlacedPublisher.publish(
-        orderPlacedEvent({
-          orderId: String(created.id),
-          userId,
-          totalCents: created.total_cents,
-        }),
-      );
-      return created;
+  ): Promise<PlaceOrderResult> {
+    return placeOrder(this.dataSource, {
+      userId,
+      shippingCountry,
+      idempotencyKey,
+      items: orderItems.map((i) => ({
+        productId: String(i.product_id),
+        quantity: i.quantity,
+      })),
     });
   }
 }

@@ -1,7 +1,9 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
+  Headers,
   HttpException,
   Param,
   ParseIntPipe,
@@ -96,13 +98,22 @@ export class OrdersController {
   @Post()
   async createOrder(
     @Body() dto: CreateOrderDto,
+    @Headers('idempotency-key') rawKey: string | undefined,
+    @Headers('x-user-id') rawUserId: string | undefined,
     @Res({ passthrough: true }) res: Response,
   ) {
     const DEFAULT_USER_ID = '1';
-    const order = await this.orders.create(dto.items, DEFAULT_USER_ID);
-    res.status(HttpStatus.CREATED);
-    res.setHeader('Location', `/orders/${order.id}`);
-    return order;
+    const userId = rawUserId && /^\d+$/.test(rawUserId) ? rawUserId : DEFAULT_USER_ID;
+    const idempotencyKey = rawKey?.trim() || undefined;
+    if (idempotencyKey && idempotencyKey.length > 255) {
+      throw new BadRequestException('Idempotency-Key must be at most 255 characters');
+    }
+
+    const result = await this.orders.create(dto.items, userId, idempotencyKey);
+    res.status(result.status ?? HttpStatus.CREATED);
+    res.setHeader('Location', `/orders/${result.body.id}`);
+    if (result.replayed) res.setHeader('Idempotent-Replayed', 'true');
+    return result.body;
   }
 }
 

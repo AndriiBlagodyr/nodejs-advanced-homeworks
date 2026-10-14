@@ -4,14 +4,19 @@ import {
   IdempotencyRecord,
   Job,
   Order,
+  OrderConfirmation,
   OrderItem,
+  OutboxMessage,
   ProcessedEvent,
+  ProcessedMessage,
   Product,
   User,
 } from './entities';
 import { InitialSchema1726000000000 } from './migrations/1726000000000-InitialSchema';
 import { AddCheckoutAndJobs1726100000000 } from './migrations/1726100000000-AddCheckoutAndJobs';
 import { ProcessedEvents1726200000000 } from './migrations/1726200000000-ProcessedEvents';
+import { OutboxAndInbox1726300000000 } from './migrations/1726300000000-OutboxAndInbox';
+import { OutboxRetryAndRetention1726400000000 } from './migrations/1726400000000-OutboxRetryAndRetention';
 
 function postgresConnection(): Record<string, string | number | undefined> {
   if (process.env.DB_URL || process.env.DATABASE_URL) {
@@ -35,11 +40,24 @@ export function createDataSourceOptions(
     ...postgresConnection(),
     synchronize: false,
     logging: false,
-    entities: [User, Product, Order, OrderItem, IdempotencyRecord, Job, ProcessedEvent],
+    entities: [
+      User,
+      Product,
+      Order,
+      OrderItem,
+      IdempotencyRecord,
+      Job,
+      ProcessedEvent,
+      OutboxMessage,
+      ProcessedMessage,
+      OrderConfirmation,
+    ],
     migrations: [
       InitialSchema1726000000000,
       AddCheckoutAndJobs1726100000000,
       ProcessedEvents1726200000000,
+      OutboxAndInbox1726300000000,
+      OutboxRetryAndRetention1726400000000,
     ],
     ...overrides,
   } as DataSourceOptions;

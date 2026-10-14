@@ -7,6 +7,7 @@
     "start": "bash scripts/with-secrets.sh dev node dist/src/main.js",
     "relay": "bash scripts/with-secrets.sh dev node dist/src/outbox/relay-main.js",
     "consumer": "bash scripts/with-secrets.sh dev node dist/src/outbox/consumer-main.js",
+    "outbox:purge": "bash scripts/with-secrets.sh dev node dist/src/outbox/purge-main.js",
     "predemo:outbox": "tsc",
     "demo:outbox": "bash scripts/with-secrets.sh dev node dist/src/demos/demo-outbox.js",
     "predemo:crash-write": "tsc",

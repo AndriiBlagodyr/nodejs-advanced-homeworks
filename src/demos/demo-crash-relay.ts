@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { placeOrder } from '../orders/place-order';
-import { countUnpublished, drainOutbox } from '../outbox/relay';
+import { countPending, drainOutbox } from '../outbox/relay';
 import { counts, DEMO_PRODUCT_ID, DEMO_USER_ID, fail, report, sleep, waitFor, withDemo } from './demo-kit';
 
 /**
@@ -20,7 +20,7 @@ async function main(): Promise<void> {
 
     const crashed = await runCrashingRelay();
     await waitFor(() => stats.deliveries >= 1);
-    const unpublishedAfterCrash = await countUnpublished(pool);
+    const unpublishedAfterCrash = await countPending(pool);
 
     const secondRun = await drainOutbox(pool, relayCh);
     await waitFor(() => stats.applied + stats.skipped >= 2);

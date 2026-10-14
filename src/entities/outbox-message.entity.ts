@@ -27,4 +27,7 @@ export class OutboxMessage {
 
   @Column({ type: 'int', default: 0 })
   attempts: number;
+
+  @Column({ type: 'text', name: 'last_error', nullable: true })
+  lastError: string | null;
 }

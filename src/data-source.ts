@@ -16,6 +16,7 @@ import { InitialSchema1726000000000 } from './migrations/1726000000000-InitialSc
 import { AddCheckoutAndJobs1726100000000 } from './migrations/1726100000000-AddCheckoutAndJobs';
 import { ProcessedEvents1726200000000 } from './migrations/1726200000000-ProcessedEvents';
 import { OutboxAndInbox1726300000000 } from './migrations/1726300000000-OutboxAndInbox';
+import { OutboxRetryAndRetention1726400000000 } from './migrations/1726400000000-OutboxRetryAndRetention';
 
 function postgresConnection(): Record<string, string | number | undefined> {
   if (process.env.DB_URL || process.env.DATABASE_URL) {
@@ -56,6 +57,7 @@ export function createDataSourceOptions(
       AddCheckoutAndJobs1726100000000,
       ProcessedEvents1726200000000,
       OutboxAndInbox1726300000000,
+      OutboxRetryAndRetention1726400000000,
     ],
     ...overrides,
   } as DataSourceOptions;

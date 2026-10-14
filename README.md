@@ -15,6 +15,8 @@ manual ack, DLQ — still used here as the transport).
 | Piece | Where |
 | --- | --- |
 | Migration: `outbox`, partial index `WHERE published_at IS NULL`, `processed_messages`, `order_confirmations` | `src/migrations/1726300000000-OutboxAndInbox.ts` |
+| Migration: `outbox.last_error`, retention indexes on `published_at` / `processed_at` | `src/migrations/1726400000000-OutboxRetryAndRetention.ts` |
+| Retention sweep (batched `DELETE`) | `src/outbox/retention.ts`, one-shot `src/outbox/purge-main.ts` |
 | Business operation: order + items + idempotency claim + outbox row in one `dataSource.transaction` | `src/orders/place-order.ts` |
 | Event contract (`toOrderPlacedEvent`), not the ORM entity | `src/outbox/order-placed.event.ts` |
 | Relay: `FOR UPDATE SKIP LOCKED` → publish (confirm channel) → `UPDATE published_at` | `src/outbox/relay.ts`, worker `src/outbox/relay-main.ts` |
@@ -26,7 +28,7 @@ Postgres, so there really are two resource managers and no shared COMMIT.
 
 Outbox columns follow the Debezium Outbox Event Router roles: `id`,
 `aggregate_type`, `aggregate_id`, `type`, `payload jsonb`, plus `created_at`,
-`published_at` (NULL = not relayed yet) and `attempts`. Debezium's canonical
+`published_at` (NULL = not relayed yet), `attempts` and `last_error`. Debezium's canonical
 names are `aggregatetype` / `aggregateid`, so moving to CDC means setting
 `route.by.field=aggregate_type` and `table.field.event.key=aggregate_id` (or
 renaming the columns). Consumers do not change.
@@ -64,8 +66,8 @@ prints `key=number` and exits non-zero when its invariant breaks.
 | `demo:crash-relay` | A child relay process is killed between broker confirm and `UPDATE published_at`; a second relay runs | `relay-killed=1` `unpublished-after-crash=1` `published=2` `deliveries=2` `applied=1` `skipped=1` `effect=1` `processed=1` `outbox-published=1` |
 
 **How the relay is killed.** `demo:crash-relay` spawns `relay-main.js` as a real
-child process with `RELAY_CRASH_AFTER_PUBLISH=1`. After `waitForConfirms()`
-succeeds and before the `UPDATE`, the child sends itself `SIGKILL`, the same as
+child process with `RELAY_CRASH_AFTER_PUBLISH=1`. After the broker confirms
+the publish and before the `UPDATE`, the child sends itself `SIGKILL`, the same as
 `kill -9`. No `finally`, no `ROLLBACK`. The OS closes the socket, Postgres
 aborts the transaction and releases the row lock, and `published_at` stays NULL.
 The parent waits until the dead relay's lock is gone (`SKIP LOCKED` skips it
@@ -100,16 +102,39 @@ no matter how careful the relay is.
   so an id cursor skips rows.
 - **One client per transaction.** The business op uses `dataSource.transaction`;
   relay and consumer use `pool.connect()`. Never `pool.query('BEGIN')`.
-- **Outbox cleanup.** Published rows are dead weight for the partial index
-  scan. Production plan: a periodic
-  `DELETE FROM outbox WHERE published_at < now() - interval '7 days'`, or
-  partitioning by `created_at` and dropping old partitions. The same applies
-  to `processed_messages`, with a retention longer than any possible redelivery.
+- **Outbox cleanup (implemented).** `purgeOutbox()` in
+  `src/outbox/retention.ts` deletes published outbox rows older than 7 days
+  and `processed_messages` marks older than 30 days, in batches of 1000
+  (`DELETE … WHERE id IN (SELECT … LIMIT 1000)`) so a backlog never holds long
+  locks. Indexes `idx_outbox_published_at` and
+  `idx_processed_messages_processed_at` keep the sweep from scanning the whole
+  table. Pending and parked rows (`published_at IS NULL`) are never deleted.
+  The relay worker runs the sweep every 10 minutes; `npm run outbox:purge`
+  runs it once (for cron / a k8s CronJob). Inbox retention (30 days) is
+  longer than outbox retention (7 days), so a message cannot be redelivered
+  after its mark is gone. At much larger volumes the next step is to partition
+  `outbox` by `created_at` and drop old partitions instead of deleting rows.
+- **Relay retry limit.** Each row is confirmed by the broker separately. A
+  row the broker refuses gets `attempts + 1` and `last_error`. The relay only
+  selects `attempts < 5` (`RELAY_MAX_ATTEMPTS`), so after 5 failed publishes
+  a poison row is **parked**: it stays in the table with its error for a
+  human, and it stops blocking `drainOutbox`. Infrastructure failures (closed
+  channel, DB error) roll the batch back without touching `attempts`, so a
+  broker outage cannot park healthy rows.
+- **Consumer retry policy.** Transient DB errors (lost connection, `08xxx`,
+  deadlock, serialization failure, admin shutdown) are retried in-process 3
+  times with 100/200 ms backoff. If the DB is still unavailable, the message
+  goes back to the queue with `reject(requeue=true)`; RabbitMQ 4.2 quorum
+  queues increment `x-delivery-count` on each requeue (checked). After 5
+  redeliveries (`CONSUMER_MAX_REDELIVERIES`) it goes to the DLQ. Permanent
+  errors (constraint/data errors) and malformed events go to the DLQ right
+  away. A short DB blip no longer sends events to the DLQ.
 - **Relay holds the row lock while publishing.** That is what makes a second
   relay skip in-flight rows. The cost is a transaction open across a network
   call, bounded by the batch size (`RELAY_BATCH_SIZE = 50`).
-- Running it outside demos: `npm run consumer` (declares topology, consumes)
-  and `npm run relay` (polls every 500 ms). The relay never declares topology.
+- Running it outside demos: `npm run consumer` (declares topology, consumes),
+  `npm run relay` (polls every 500 ms, sweeps retention every 10 min) and
+  `npm run outbox:purge` (one-shot sweep). The relay never declares topology.
 
 ## Grading
 

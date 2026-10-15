@@ -59,17 +59,29 @@ export async function applyOrderPlaced(pool: Pool, event: OrderPlacedEvent): Pro
   }
 }
 
+export type ConsumerOptions = {
+  /**
+   * Runs after the effect committed (or was found already applied) and before
+   * ack, on every delivery. Must be idempotent itself, e.g. a BullMQ add with
+   * a stable jobId. A failure requeues the message like a transient DB error.
+   */
+  afterEffect?: (event: OrderPlacedEvent) => Promise<void>;
+};
+
+class AfterEffectError extends Error {}
+
 export async function startOrderPlacedConsumer(
   ch: Channel,
   pool: Pool,
   stats: ConsumerStats = emptyStats(),
+  opts: ConsumerOptions = {},
 ): Promise<{ stats: ConsumerStats; stop: () => Promise<void> }> {
   await ch.prefetch(BROKER_PREFETCH);
   const { consumerTag } = await ch.consume(
     QUEUE_ORDER_PLACED,
     (msg) => {
       if (!msg) return;
-      void handle(ch, pool, stats, msg);
+      void handle(ch, pool, stats, msg, opts);
     },
     { noAck: false },
   );
@@ -86,6 +98,7 @@ async function handle(
   pool: Pool,
   stats: ConsumerStats,
   msg: ConsumeMessage,
+  opts: ConsumerOptions,
 ): Promise<void> {
   stats.deliveries += 1;
   const event = parseOrderPlacedEvent(msg.content);
@@ -96,11 +109,17 @@ async function handle(
   }
   try {
     const applied = await withLocalRetry(() => applyOrderPlaced(pool, event));
+    if (opts.afterEffect) {
+      await opts.afterEffect(event).catch((err: unknown) => {
+        throw new AfterEffectError((err as Error)?.message ?? String(err));
+      });
+    }
     if (applied) stats.applied += 1;
     else stats.skipped += 1;
     ch.ack(msg);
   } catch (err) {
-    if (isTransientDbError(err) && deliveryCount(msg) < CONSUMER_MAX_REDELIVERIES) {
+    const transient = isTransientDbError(err) || err instanceof AfterEffectError;
+    if (transient && deliveryCount(msg) < CONSUMER_MAX_REDELIVERIES) {
       // Back to the queue: x-delivery-count grows on every requeue (quorum queue).
       stats.requeued += 1;
       safely(() => ch.reject(msg, true));

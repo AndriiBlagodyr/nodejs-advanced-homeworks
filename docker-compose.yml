@@ -77,6 +77,51 @@ services:
       timeout: 10s
       retries: 20
 
+  # Cache only: bounded memory, evicts any key under pressure. No persistence.
+  redis-cache:
+    image: redis:8-alpine
+    command:
+      - redis-server
+      - --maxmemory
+      - 64mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    ports:
+      - "6390:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # BullMQ + sessions + rate-limit counters: must never evict, survives restarts.
+  redis-queue:
+    image: redis:8-alpine
+    command:
+      - redis-server
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - noeviction
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    ports:
+      - "6391:6379"
+    volumes:
+      - redis_queue_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
 volumes:
   postgres_data:
   pact_db_data:
+  redis_queue_data:

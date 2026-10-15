@@ -11,6 +11,17 @@ import { redisConfigured } from '../redis/clients';
 
 export const DEMO_PRODUCT_FIRST_ID = 9100;
 
+/** Pending migrations only: every demo must work on an empty database. */
+export async function migrateDb(): Promise<void> {
+  const ds = new DataSource(createDataSourceOptions());
+  await ds.initialize();
+  try {
+    await ds.runMigrations({ transaction: 'each' });
+  } finally {
+    await ds.destroy();
+  }
+}
+
 /** Migrations + demo products (ids 9100…), so a fresh database works too. */
 export async function prepareDb(
   productCount: number,

@@ -10,6 +10,7 @@ import {
 } from '../queue/receipts.queue';
 import { configGet, connectQueueProducerRedis, connectQueueWorkerRedis } from '../redis/clients';
 import { fail, report, sleep, waitFor } from './demo-kit';
+import { migrateDb } from './redis-kit';
 
 /** Same code as the real queue, isolated name so the demo can wipe it. */
 const DEMO_QUEUE = 'receipts-demo';
@@ -23,6 +24,8 @@ async function main(): Promise<void> {
 }
 
 async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
+  // The scheduled job is the outbox retention sweep: it needs the HW-22 tables.
+  await migrateDb();
   const producerConn = await connectQueueProducerRedis();
   const workerConn = await connectQueueWorkerRedis();
   const pool = createPool();

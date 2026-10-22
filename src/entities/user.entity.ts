@@ -23,6 +23,12 @@ export class User {
   @Column({ type: 'int', name: 'balance_cents', default: 0 })
   balanceCents: number;
 
+  @Column({ type: 'text', name: 'password_hash', nullable: true })
+  passwordHash: string | null;
+
+  @Column({ type: 'text', default: 'buyer' })
+  role: string;
+
   @Column({
     type: 'timestamptz',
     name: 'created_at',

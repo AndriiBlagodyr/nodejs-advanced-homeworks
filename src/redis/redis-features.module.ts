@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import type Redis from 'ioredis';
 import { DataSource } from 'typeorm';
+import { AuthModule } from '../auth/auth.module';
 import {
   CARD_CACHE_OPTIONS,
   ProductCardRepository,
@@ -40,6 +41,7 @@ class RedisShutdown implements OnApplicationShutdown {
 
 /** Card cache, sessions and rate limit. Loaded only when both Redis URLs are set. */
 @Module({
+  imports: [AuthModule],
   providers: [
     { provide: CACHE_REDIS, useFactory: connectCacheRedis },
     { provide: STATE_REDIS, useFactory: connectStateRedis },

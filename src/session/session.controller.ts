@@ -2,14 +2,17 @@ import {
   Controller,
   Delete,
   Get,
-  Headers,
   HttpCode,
   Post,
   Req,
   Res,
   UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { CurrentUser } from '../auth/auth.decorators';
+import { AuthGuard } from '../auth/auth.guard';
+import type { AccessClaims } from '../auth/tokens';
 import { clearSessionCookie, type SessionRequest, setSessionCookie } from './session.middleware';
 import { type SessionData, SessionStore } from './session.store';
 
@@ -17,17 +20,17 @@ import { type SessionData, SessionStore } from './session.store';
 export class SessionController {
   constructor(private readonly store: SessionStore) {}
 
-  /** Starts a session (stand-in for login until HW-24 adds auth). */
+  /** Starts a server-side session for the user the access token proves. */
   @Post()
+  @UseGuards(AuthGuard)
   async create(
     @Req() req: SessionRequest,
-    @Headers('x-user-id') rawUserId: string | undefined,
+    @CurrentUser() user: AccessClaims,
     @Res({ passthrough: true }) res: Response,
   ) {
     // Rotate on every login: never keep a session id that existed before it.
     if (req.session) await this.store.destroy(req.session.sid);
-    const userId = rawUserId && /^\d+$/.test(rawUserId) ? rawUserId : '1';
-    const { sid, data } = await this.store.create(userId);
+    const { sid, data } = await this.store.create(user.sub);
     setSessionCookie(req, res, sid);
     return toBody(data);
   }

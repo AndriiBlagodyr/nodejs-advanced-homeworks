@@ -1,14 +1,18 @@
+import type Redis from 'ioredis';
 import { connectStateRedis } from '../redis/clients';
 import { SESSION_COOKIE, SessionStore } from '../session/session.store';
+import { call, DEMO_PASSWORD, insertUser, migrate, resetAuthUsers } from './auth-kit';
 import { fail, report, sleep } from './demo-kit';
+import { ensureEphemeralAuthEnv } from './ephemeral-auth';
 import { bootApp, scanKeys } from './redis-kit';
 
-const DEMO_USER_ID = '9001';
+const DEMO_EMAIL = 'hw23-session@example.com';
 
 /**
  * Session in the noeviction Redis with rolling TTL. Request 1 creates it on
- * pod A, request 2 renews it on pod A after a pause, then pod A is shut down
- * and request 3 reads the same session on a freshly started pod B.
+ * pod A (with an access token: the session is for the user the token proves),
+ * request 2 renews it on pod A after a pause, then pod A is shut down and
+ * request 3 reads the same session on a freshly started pod B.
  */
 async function main(): Promise<void> {
   const { lines, ok } = await run();
@@ -16,17 +20,28 @@ async function main(): Promise<void> {
 }
 
 async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
+  ensureEphemeralAuthEnv();
+  await migrate();
+  await resetAuthUsers('hw23-session@%');
+  const userId = await insertUser(DEMO_EMAIL, 'buyer', 'HW23 Session');
+
   const redis = await connectStateRedis();
   try {
-    await removeDemoSessions(redis);
+    await removeDemoSessions(redis, userId);
 
     let requests = 0;
     const sids = new Set<string>();
 
     let pod = await bootApp();
+    const login = await call(pod.base, 'POST', '/auth/login', {
+      body: { email: DEMO_EMAIL, password: DEMO_PASSWORD },
+    });
+    const accessToken = String(login.body.access_token ?? '');
+    if (!accessToken) throw new Error(`login failed (status ${login.status})`);
+
     const created = await fetch(`${pod.base}/session`, {
       method: 'POST',
-      headers: { 'x-user-id': DEMO_USER_ID },
+      headers: { authorization: `Bearer ${accessToken}` },
     });
     requests += 1;
     const sid = cookieValue(created.headers.get('set-cookie'));
@@ -52,11 +67,11 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
     const body = (await afterRestart.json()) as { requests?: number; user_id?: string };
 
     // Cookie flags: the local stand gets no Secure; the same app behind a TLS
-    // proxy (X-Forwarded-Proto from a trusted hop) does. Separate user, removed.
+    // proxy (X-Forwarded-Proto from a trusted hop) does. That extra session is removed.
     const localSecure = isSecure(created.headers.get('set-cookie'));
     const proxied = await fetch(`${pod.base}/session`, {
       method: 'POST',
-      headers: { 'x-user-id': '9002', 'x-forwarded-proto': 'https' },
+      headers: { authorization: `Bearer ${accessToken}`, 'x-forwarded-proto': 'https' },
     });
     const proxiedCookie = proxied.headers.get('set-cookie');
     const proxiedSecure = isSecure(proxiedCookie);
@@ -64,10 +79,10 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
     if (proxiedSid) await redis.del(SessionStore.keyFor(proxiedSid));
     await pod.app.close();
 
-    const sessionsInRedis = (await demoSessionKeys(redis)).length;
+    const sessionsInRedis = (await demoSessionKeys(redis, userId)).length;
     const inRedis = await redis.exists(key);
     const ttlRenewed = ttlAfter > ttlBefore ? 1 : 0;
-    const survivedRestart = afterRestart.status === 200 && body.user_id === DEMO_USER_ID ? 1 : 0;
+    const survivedRestart = afterRestart.status === 200 && body.user_id === userId ? 1 : 0;
 
     return {
       lines: {
@@ -113,14 +128,14 @@ function collect(sids: Set<string>, header: string | null): void {
   if (sid) sids.add(sid);
 }
 
-async function demoSessionKeys(redis: import('ioredis').default): Promise<string[]> {
+async function demoSessionKeys(redis: Redis, userId: string): Promise<string[]> {
   const keys = await scanKeys(redis, 'session:*');
   const owners = await Promise.all(keys.map((k) => redis.hget(k, 'userId')));
-  return keys.filter((_, i) => owners[i] === DEMO_USER_ID);
+  return keys.filter((_, i) => owners[i] === userId);
 }
 
-async function removeDemoSessions(redis: import('ioredis').default): Promise<void> {
-  const keys = await demoSessionKeys(redis);
+async function removeDemoSessions(redis: Redis, userId: string): Promise<void> {
+  const keys = await demoSessionKeys(redis, userId);
   if (keys.length > 0) await redis.del(...keys);
 }
 

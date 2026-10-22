@@ -4,10 +4,21 @@ import { io } from 'socket.io-client';
 const BASE = process.env.BASE_URL ?? 'http://127.0.0.1:3000';
 const sameRoom = process.argv.includes('--same-room');
 
+function accessToken() {
+  const token = process.env.ACCESS_TOKEN;
+  if (!token) {
+    throw new Error('ACCESS_TOKEN is required: log in and export the access token');
+  }
+  return token;
+}
+
 async function createOrder() {
   const res = await fetch(`${BASE}/orders`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken()}`,
+    },
     body: JSON.stringify({ items: [{ product_id: 1, quantity: 1 }] }),
   });
   if (!res.ok) {
@@ -19,7 +30,10 @@ async function createOrder() {
 async function patchStatus(orderId, status) {
   const res = await fetch(`${BASE}/orders/${orderId}/status`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken()}`,
+    },
     body: JSON.stringify({ status }),
   });
   if (!res.ok) {
@@ -27,10 +41,10 @@ async function patchStatus(orderId, status) {
   }
 }
 
-function connectAndJoin(orderId, userId) {
+function connectAndJoin(orderId, token) {
   return new Promise((resolve, reject) => {
     const socket = io(BASE, {
-      auth: { userId },
+      auth: { token },
       transports: ['websocket'],
     });
     const received = { count: 0 };
@@ -63,12 +77,13 @@ function connectAndJoin(orderId, userId) {
 }
 
 async function main() {
+  const token = accessToken();
   const orderA = (await createOrder()).id;
   const orderB = (await createOrder()).id;
   const roomB = sameRoom ? orderA : orderB;
 
-  const clientA = await connectAndJoin(orderA, '1');
-  const clientB = await connectAndJoin(roomB, '1');
+  const clientA = await connectAndJoin(orderA, token);
+  const clientB = await connectAndJoin(roomB, token);
 
   await patchStatus(orderA, 'cancelled');
   await new Promise((r) => setTimeout(r, 400));

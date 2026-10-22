@@ -17,6 +17,7 @@ import { AddCheckoutAndJobs1726100000000 } from './migrations/1726100000000-AddC
 import { ProcessedEvents1726200000000 } from './migrations/1726200000000-ProcessedEvents';
 import { OutboxAndInbox1726300000000 } from './migrations/1726300000000-OutboxAndInbox';
 import { OutboxRetryAndRetention1726400000000 } from './migrations/1726400000000-OutboxRetryAndRetention';
+import { Auth1726500000000 } from './migrations/1726500000000-Auth';
 
 function postgresConnection(): Record<string, string | number | undefined> {
   if (process.env.DB_URL || process.env.DATABASE_URL) {
@@ -58,6 +59,7 @@ export function createDataSourceOptions(
       ProcessedEvents1726200000000,
       OutboxAndInbox1726300000000,
       OutboxRetryAndRetention1726400000000,
+      Auth1726500000000,
     ],
     ...overrides,
   } as DataSourceOptions;

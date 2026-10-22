@@ -17,7 +17,7 @@ export class SessionMiddleware implements NestMiddleware {
       try {
         const data = await this.store.touch(sid);
         if (data) req.session = { sid, data };
-        else clearSessionCookie(res);
+        else clearSessionCookie(req, res);
       } catch (err) {
         this.logger.warn(`session store unavailable: ${(err as Error).message}`);
       }
@@ -36,10 +36,22 @@ export function readCookie(header: string | undefined, name: string): string | u
   return undefined;
 }
 
-export function setSessionCookie(res: Response, sid: string): void {
-  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${sid}; Path=/; HttpOnly; SameSite=Lax`);
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+/**
+ * Secure everywhere except plain HTTP to a loopback host (the local stand).
+ * Plain HTTP to any other host still gets Secure, so the browser refuses to
+ * send the sid back unencrypted instead of leaking it.
+ */
+export function cookieAttributes(req: Request): string {
+  const local = !req.secure && LOOPBACK_HOSTS.has(req.hostname);
+  return `Path=/; HttpOnly; SameSite=Lax${local ? '' : '; Secure'}`;
 }
 
-export function clearSessionCookie(res: Response): void {
-  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+export function setSessionCookie(req: Request, res: Response, sid: string): void {
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${sid}; ${cookieAttributes(req)}`);
+}
+
+export function clearSessionCookie(req: Request, res: Response): void {
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; ${cookieAttributes(req)}; Max-Age=0`);
 }

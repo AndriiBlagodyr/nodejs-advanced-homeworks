@@ -9,10 +9,12 @@ export type SingleFlightOptions = {
   /** Short TTL for "not found", so a missing id cannot hammer the DB either. */
   negativeTtlBaseSec: number;
   negativeTtlJitterSec: number;
-  /** Lock lifetime; must exceed the slowest expected load. */
+  /**
+   * Lock lifetime; must exceed the slowest expected load. Waiters wait as long
+   * as the lock lives, so this is also the longest a waiter can wait before
+   * one of them takes over a dead holder's work.
+   */
   lockTtlMs: number;
-  /** How long a waiter polls the cache before giving up and loading itself. */
-  waitMs: number;
   pollMs: number;
 };
 
@@ -20,7 +22,9 @@ type Read<T> = { kind: 'hit'; value: T | null } | { kind: 'miss' } | { kind: 'do
 
 /**
  * Cache-aside with a single-flight lock. On a miss, one caller wins
- * SET lock NX PX and loads; the rest poll the cache. The lock is an
+ * SET lock NX PX and loads; the rest poll the cache while the lock exists.
+ * When the lock is gone without a value (holder crashed, load failed, TTL ran
+ * out), the next SET NX elects exactly one new loader. The lock is an
  * optimisation: if it ever fails, the cost is an extra DB read, never wrong
  * data. Any Redis error degrades to reading the DB directly.
  */
@@ -36,7 +40,6 @@ export class SingleFlightCache {
     if (first.kind === 'down') return load();
 
     const lockKey = `lock:${key}`;
-    const deadline = Date.now() + this.opts.waitMs;
     for (;;) {
       let token: string | null;
       try {
@@ -58,10 +61,11 @@ export class SingleFlightCache {
         }
       }
 
+      // No wall-clock deadline: a slow load must not release the waiters onto the DB.
       await new Promise((r) => setTimeout(r, this.opts.pollMs));
       const polled = await this.read<T>(key);
       if (polled.kind === 'hit') return polled.value;
-      if (polled.kind === 'down' || Date.now() > deadline) return load();
+      if (polled.kind === 'down') return load();
     }
   }
 

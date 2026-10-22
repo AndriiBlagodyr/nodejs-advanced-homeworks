@@ -50,6 +50,18 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
     requests += 1;
     collect(sids, afterRestart.headers.get('set-cookie'));
     const body = (await afterRestart.json()) as { requests?: number; user_id?: string };
+
+    // Cookie flags: the local stand gets no Secure; the same app behind a TLS
+    // proxy (X-Forwarded-Proto from a trusted hop) does. Separate user, removed.
+    const localSecure = isSecure(created.headers.get('set-cookie'));
+    const proxied = await fetch(`${pod.base}/session`, {
+      method: 'POST',
+      headers: { 'x-user-id': '9002', 'x-forwarded-proto': 'https' },
+    });
+    const proxiedCookie = proxied.headers.get('set-cookie');
+    const proxiedSecure = isSecure(proxiedCookie);
+    const proxiedSid = cookieValue(proxiedCookie);
+    if (proxiedSid) await redis.del(SessionStore.keyFor(proxiedSid));
     await pod.app.close();
 
     const sessionsInRedis = (await demoSessionKeys(redis)).length;
@@ -68,6 +80,8 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
         'ttl-renewed': ttlRenewed,
         'survived-restart': survivedRestart,
         'server-requests': body.requests ?? 0,
+        'cookie-secure-local': localSecure,
+        'cookie-secure-behind-tls-proxy': proxiedSecure,
       },
       ok:
         requests >= 3 &&
@@ -76,7 +90,9 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
         inRedis === 1 &&
         ttlRenewed === 1 &&
         survivedRestart === 1 &&
-        body.requests === requests,
+        body.requests === requests &&
+        localSecure === 0 &&
+        proxiedSecure === 1,
     };
   } finally {
     await redis.quit().catch(() => undefined);
@@ -86,6 +102,10 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
 function cookieValue(header: string | null): string | null {
   const match = header ? new RegExp(`${SESSION_COOKIE}=([^;]*)`).exec(header) : null;
   return match && match[1] ? match[1] : null;
+}
+
+function isSecure(header: string | null): number {
+  return header && /;\s*Secure(;|$)/i.test(header) ? 1 : 0;
 }
 
 function collect(sids: Set<string>, header: string | null): void {

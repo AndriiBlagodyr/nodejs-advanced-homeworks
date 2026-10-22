@@ -55,8 +55,11 @@ counters sit there too: evicting a counter would reset someone's limit.
 - **Single-flight:** on a miss, `SET lock:product:card:{id} <uuid> NX PX 5000`.
   The winner re-checks the cache, reads the DB, writes the value, and releases
   the lock with a Lua `GET == token → DEL` so it never deletes a lock that
-  expired and was taken by someone else. Losers poll the key every 25 ms for up
-  to 3 s, then fall back to reading the DB themselves.
+  expired and was taken by someone else. Losers poll the key every 25 ms **for
+  as long as the lock exists**. There's no separate wall-clock timeout, because
+  a timeout shorter than the lock TTL would send every waiter to the DB on a
+  slow read. If the lock disappears without a value (holder crashed, load
+  failed, or 5 s passed), the next `SET NX` elects exactly one new loader.
 - **Redis down = slower, not broken:** a failed read goes straight to the DB, a
   failed write is ignored. Redis is never the source of truth.
 - **Stale stock is accepted:** stock on the card can lag by up to one TTL.
@@ -66,11 +69,17 @@ counters sit there too: evicting a counter would reset someone's limit.
 ### 2. Sessions with rolling TTL
 
 `POST /session` creates a random 32-byte `sid` (cookie `sid`, `HttpOnly`,
-`SameSite=Lax`) and a hash `session:{sha256(sid)}` (the raw token is never a
+`SameSite=Lax`, `Secure`) and a hash `session:{sha256(sid)}` (the raw token is never a
 key). Every request with the cookie runs one Lua script: `EXISTS` → `HINCRBY
 requests` → `HSET lastSeenAt` → `PEXPIRE 30 min` → `HGETALL`. The TTL is pushed
 forward atomically, and an expired session is never resurrected. Login rotates
 the session; `DELETE /session` deletes the key.
+
+`Secure` is left out only for plain HTTP to `localhost` / `127.0.0.1` / `::1`
+(the local stand). Behind a TLS-terminating proxy the app sees
+`X-Forwarded-Proto: https` from a trusted hop and sets `Secure`. Plain HTTP to
+any other host also gets `Secure`, so the browser won't send `sid` over an
+unencrypted connection.
 
 ### 3. Rate limit: sliding window log
 
@@ -84,7 +93,17 @@ One Lua script per request: `TIME` (Redis clock, so pods' clocks don't matter)
 `PEXPIRE`. When blocked, it returns how long until the oldest entry leaves the
 window. The guard answers `429` with `Retry-After` (seconds, at least 1) plus
 `RateLimit-Limit` / `RateLimit-Remaining`. Key `rl:{route}:{ip}`, so all pods
-share it. If Redis is down the guard fails open (logs and lets the request
+share it.
+
+`{ip}` is `req.ip`, which depends on Express `trust proxy` (set in
+`src/configure-app.ts`). Without it, behind an ingress every client has the
+proxy's address and shares one window. With `true`, any client could forge
+`X-Forwarded-For` and get a fresh window per request. The default is
+`loopback, linklocal, uniquelocal`, so `X-Forwarded-For` is trusted only from
+proxies on private networks. `TRUST_PROXY` overrides it (hop count, `true`/`false`,
+or a list of subnets) for setups where the proxy has a public address.
+
+If Redis is down the guard fails open (logs and lets the request
 through) because the limiter protects the DB, it isn't a security boundary.
 Config: `RATE_LIMIT_LIMIT` (60) and `RATE_LIMIT_WINDOW_MS` (60000).
 
@@ -113,19 +132,22 @@ Each demo resets only its own keys (`SCAN`, never `KEYS`), prints
 ```text
 $ npm run demo:cache
 cache-lru=1  cache-maxmemory=1  cache-maxmemory-mb=64
-warmed=60  ttl-distinct=35  ttl-min=303  ttl-max=360
+warmed=60  ttl-distinct=36  ttl-min=300  ttl-max=360
 concurrent=50  all-served=1  db-calls=1  lock-left=0
+slow-load-ms=3500  slow-db-calls=1  slow-all-served=1
 warm-reads=100  db-calls-warm=0
 
 $ npm run demo:session
 requests=3  sessions=1  sessions-in-redis=1  in-redis=1
-ttl-before-ms=1798492  ttl-after-ms=1799995  ttl-renewed=1
+ttl-before-ms=1798491  ttl-after-ms=1799996  ttl-renewed=1
 survived-restart=1  server-requests=3
+cookie-secure-local=0  cookie-secure-behind-tls-proxy=1
 
 $ npm run demo:ratelimit
 instances=2  limit=5  window-ms=10000  requests=12
 allowed=5  blocked=7  allowed-pod-a=3  allowed-pod-b=2
 status=429  retry-after=1  retry-after-seconds=10
+proxied-clients-separate=1
 
 $ npm run demo:queue
 queue-noeviction=1  attempts=3  fail-times=2  completed=1
@@ -139,11 +161,18 @@ schedulers=1  scheduler-upserts=2  scheduled-runs=7
   connection at runtime. `db-calls` is counted at the driver by a TypeORM
   logger that matches the `/* product-card */` SQL tag. Out of 50 concurrent
   requests for a just-expired key, 1 reached Postgres; 100 warm reads, 0.
-- **session:** 1.5 s pause between requests 1 and 2; PTTL went from 1798492 ms
-  to 1799995 ms. Then the Nest app was closed and a new one booted, and request
-  3 got the same session (`requests=3` counted server-side).
+  The second stampede makes the DB read take 3.5 s (longer than a typical fixed
+  wait, shorter than the 5 s lock). The 49 waiters kept waiting on the lock, and
+  still only 1 query reached Postgres (`slow-db-calls=1`).
+- **session:** 1.5 s pause between requests 1 and 2; PTTL went from 1798491 ms
+  to 1799996 ms. Then the Nest app was closed and a new one booted, and request
+  3 got the same session (`requests=3` counted server-side). The local cookie
+  has no `Secure`; the same app behind `X-Forwarded-Proto: https` sets it.
 - **ratelimit:** two separate Nest apps on two ports, requests alternated, limit 5
-  per 10 s. Exactly 5 got through in total (3 + 2), not 5 per pod.
+  per 10 s. Exactly 5 got through in total (3 + 2), not 5 per pod. After that
+  the direct client is blocked, yet two clients coming through a trusted proxy
+  (`X-Forwarded-For: 203.0.113.10` / `.11`) still got 200 each: separate windows,
+  not the proxy's shared one.
 - **queue:** queue `receipts-demo` (same code, isolated name). The job fails
   twice on purpose and succeeds on the 3rd attempt. Two adds with one jobId
   gave one job; re-adding after completion did not run it again. The scheduler

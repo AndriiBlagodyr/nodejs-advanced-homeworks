@@ -8,12 +8,14 @@ import {
 import { QueryTagCounter } from '../query-tag-counter';
 import { configGet, connectCacheRedis } from '../redis/clients';
 import { SingleFlightCache } from '../redis/single-flight-cache';
-import { fail, report } from './demo-kit';
+import { fail, report, sleep } from './demo-kit';
 import { DEMO_PRODUCT_FIRST_ID, deleteKeys, prepareDb } from './redis-kit';
 
 const WARM_KEYS = 60;
 const CONCURRENT = 50;
 const WARM_READS = 100;
+/** Above the old fixed 3 s wait, below CARD_CACHE_OPTIONS.lockTtlMs. */
+const SLOW_LOAD_MS = 3500;
 
 /**
  * Cache-aside on the product card. db-calls is counted at the driver: a
@@ -56,6 +58,24 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
     const allServed = results.every((c) => c?.id === hot) ? 1 : 0;
     const lockLeft = await redis.exists(`lock:${cardKey(hot)}`);
 
+    // 2b) Same stampede, but the DB read is slow (longer than any fixed wait,
+    // shorter than the lock TTL): waiters must keep waiting, not hit the DB.
+    const slow = ids[1];
+    const repo = new ProductCardRepository(ds);
+    const slowCache = new SingleFlightCache(redis, CARD_CACHE_OPTIONS);
+    await redis.del(cardKey(slow));
+    counter.reset();
+    const slowResults = await Promise.all(
+      Array.from({ length: CONCURRENT }, () =>
+        slowCache.getOrLoad(cardKey(slow), async () => {
+          await sleep(SLOW_LOAD_MS);
+          return repo.load(slow);
+        }),
+      ),
+    );
+    const slowDbCalls = counter.count;
+    const slowServed = slowResults.every((c) => c?.id === slow) ? 1 : 0;
+
     // 3) 100 reads of a warm cache.
     counter.reset();
     for (let i = 0; i < WARM_READS; i += 1) await cards.get(ids[i % ids.length]);
@@ -77,6 +97,9 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
         'all-served': allServed,
         'db-calls': dbCalls,
         'lock-left': lockLeft,
+        'slow-load-ms': SLOW_LOAD_MS,
+        'slow-db-calls': slowDbCalls,
+        'slow-all-served': slowServed,
         'warm-reads': WARM_READS,
         'db-calls-warm': dbCallsWarm,
       },
@@ -88,6 +111,8 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
         allServed === 1 &&
         dbCalls === 1 &&
         lockLeft === 0 &&
+        slowDbCalls === 1 &&
+        slowServed === 1 &&
         dbCallsWarm === 0,
     };
   } finally {

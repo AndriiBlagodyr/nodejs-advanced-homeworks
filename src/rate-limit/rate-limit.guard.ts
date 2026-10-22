@@ -25,7 +25,8 @@ export class RateLimitGuard implements CanActivate {
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const req = ctx.switchToHttp().getRequest<Request>();
     const res = ctx.switchToHttp().getResponse<Response>();
-    const key = `rl:${req.route?.path ?? req.path}:${req.ip ?? req.socket.remoteAddress ?? 'unknown'}`;
+    // req.ip is the client behind trusted proxies only (`trust proxy` in configure-app.ts).
+    const key = `rl:${req.route?.path ?? req.path}:${req.ip ?? 'unknown'}`;
 
     let decision;
     try {

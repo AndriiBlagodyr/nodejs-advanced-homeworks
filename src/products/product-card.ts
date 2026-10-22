@@ -10,7 +10,6 @@ export const CARD_CACHE_OPTIONS: SingleFlightOptions = {
   negativeTtlBaseSec: 30,
   negativeTtlJitterSec: 15,
   lockTtlMs: 5000,
-  waitMs: 3000,
   pollMs: 25,
 };
 

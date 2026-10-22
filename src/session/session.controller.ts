@@ -28,7 +28,7 @@ export class SessionController {
     if (req.session) await this.store.destroy(req.session.sid);
     const userId = rawUserId && /^\d+$/.test(rawUserId) ? rawUserId : '1';
     const { sid, data } = await this.store.create(userId);
-    setSessionCookie(res, sid);
+    setSessionCookie(req, res, sid);
     return toBody(data);
   }
 
@@ -42,7 +42,7 @@ export class SessionController {
   @HttpCode(204)
   async destroy(@Req() req: SessionRequest, @Res({ passthrough: true }) res: Response) {
     if (req.session) await this.store.destroy(req.session.sid);
-    clearSessionCookie(res);
+    clearSessionCookie(req, res);
   }
 }
 

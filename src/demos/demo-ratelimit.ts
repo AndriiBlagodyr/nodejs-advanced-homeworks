@@ -52,6 +52,20 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
       }
     }
 
+    // Behind a proxy the TCP peer is the proxy (127.0.0.1 here, trusted). The
+    // direct client is already blocked; two different end clients forwarded by
+    // the proxy must still get their own windows.
+    const viaProxy = await Promise.all(
+      ['203.0.113.10', '203.0.113.11'].map(async (client, i) => {
+        const res = await fetch(`${pods[i % PODS].base}/products/${DEMO_PRODUCT_FIRST_ID}/card`, {
+          headers: { 'x-forwarded-for': client },
+        });
+        await res.arrayBuffer();
+        return res.status;
+      }),
+    );
+    const proxiedSeparate = viaProxy.every((s) => s === 200) ? 1 : 0;
+
     return {
       lines: {
         instances: pods.length,
@@ -65,6 +79,7 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
         status: lastBlockedStatus,
         'retry-after': retryAfter,
         'retry-after-seconds': retryAfterSeconds,
+        'proxied-clients-separate': proxiedSeparate,
       },
       ok:
         pods.length >= 2 &&
@@ -72,7 +87,8 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
         blocked >= 1 &&
         lastBlockedStatus === 429 &&
         retryAfter === 1 &&
-        retryAfterSeconds >= 1,
+        retryAfterSeconds >= 1 &&
+        proxiedSeparate === 1,
     };
   } finally {
     for (const pod of pods) await pod.app.close().catch(() => undefined);

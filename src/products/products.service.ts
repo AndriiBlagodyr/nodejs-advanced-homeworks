@@ -40,6 +40,22 @@ export class ProductsService {
     };
   }
 
+  async create(input: {
+    name: string;
+    price_cents: number;
+    stock?: number;
+  }): Promise<{ id: number; name: string; price_cents: number }> {
+    const saved = await this.repo.save(
+      this.repo.create({
+        name: input.name,
+        priceCents: input.price_cents,
+        stock: input.stock ?? 0,
+        isActive: true,
+      }),
+    );
+    return { id: Number(saved.id), name: saved.name, price_cents: saved.priceCents };
+  }
+
   async findOne(id: number): Promise<{ id: number; name: string; price_cents: number }> {
     const p = await this.repo.findOne({ where: { id: String(id) } as any });
     if (!p) throw new NotFoundException(`Product ${id} not found`);

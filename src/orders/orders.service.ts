@@ -5,6 +5,7 @@ import { Order, type OrderStatus } from '../entities/order.entity';
 import { Product } from '../entities/product.entity';
 import { User } from '../entities/user.entity';
 import { OrderEventsService } from './order-events.service';
+import type { AccessClaims } from '../auth/tokens';
 import { placeOrder, type PlaceOrderResult } from './place-order';
 
 export interface OrderItemInput {
@@ -55,8 +56,13 @@ export class OrdersService {
     };
   }
 
-  async findAll(limit = 20, cursor?: string): Promise<OrderPage> {
+  /**
+   * A list has no "someone else's row" to refuse, so ownership goes straight
+   * into the WHERE: a buyer's page only ever contains their own orders.
+   */
+  async findAllForViewer(viewer: AccessClaims, limit = 20, cursor?: string): Promise<OrderPage> {
     const where: Record<string, unknown> = {};
+    if (viewer.role !== 'admin') where.userId = viewer.sub;
     if (cursor) {
       where.id = MoreThan(Number(cursor));
     }
@@ -101,17 +107,35 @@ export class OrdersService {
     return order;
   }
 
-  async findOne(id: number): Promise<OrderResponse> {
+  /**
+   * Ownership is checked here, after the row is loaded, not in a guard.
+   * The guard has the token and nothing else; it would have to query the
+   * order itself and the handler would query it again. A `WHERE user_id = $me`
+   * would also hide the row and answer 404, but another buyer's order is 403.
+   */
+  async findOneForViewer(id: number, viewer: AccessClaims): Promise<OrderResponse> {
     const order = await this.orderRepo.findOne({
       where: { id: String(id) } as any,
       relations: ['items'],
     });
     if (!order) throw new NotFoundException(`Order ${id} not found`);
+    if (viewer.role !== 'admin' && String(order.userId) !== viewer.sub) {
+      throw new ForbiddenException('forbidden');
+    }
     return this.toResponse(order);
   }
 
-  async updateStatus(id: number, status: OrderStatus): Promise<OrderResponse> {
+  /**
+   * An admin may set any status. The owner may only cancel: a buyer marking
+   * their own order `completed` or `refunded` is the owner check passing and
+   * the permission still missing.
+   */
+  async updateStatus(id: number, status: OrderStatus, viewer: AccessClaims): Promise<OrderResponse> {
     const order = await this.findEntity(id);
+    if (viewer.role !== 'admin') {
+      if (String(order.userId) !== viewer.sub) throw new ForbiddenException('forbidden');
+      if (status !== 'cancelled') throw new ForbiddenException('only cancellation is allowed');
+    }
     order.status = status;
     const saved = await this.orderRepo.save(order);
     this.orderEvents.publish(Number(saved.id), saved.status);

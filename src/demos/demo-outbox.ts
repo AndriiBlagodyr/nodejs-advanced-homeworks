@@ -3,6 +3,8 @@ import type { AddressInfo } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module';
+import { ensureEphemeralAuthEnv } from './ephemeral-auth';
+import { hashPassword } from '../auth/password';
 import { configureApp } from '../configure-app';
 import { drainOutbox } from '../outbox/relay';
 import { counts, DEMO_PRODUCT_ID, DEMO_USER_ID, fail, report, sleep, waitFor, withDemo } from './demo-kit';
@@ -11,21 +13,41 @@ import { counts, DEMO_PRODUCT_ID, DEMO_USER_ID, fail, report, sleep, waitFor, wi
  * Happy path through the real HTTP edge: two concurrent POST /orders with the
  * same Idempotency-Key → one order, one outbox row, one publish, one effect.
  */
+const OUTBOX_DEMO_PASSWORD = 'outbox-demo-password';
+
 async function main(): Promise<void> {
-  const result = await withDemo(async ({ pool, relayCh, stats }) => {
+  const result = await withDemo(async ({ ds, pool, relayCh, stats }) => {
+    ensureEphemeralAuthEnv();
+    await ds.query(`UPDATE users SET password_hash = $1, role = 'buyer' WHERE id = $2`, [
+      await hashPassword(OUTBOX_DEMO_PASSWORD),
+      DEMO_USER_ID,
+    ]);
+
     const app = await NestFactory.create(AppModule, { logger: ['error'] });
     configureApp(app);
     await app.listen(0, '127.0.0.1');
     const { port } = app.getHttpServer().address() as AddressInfo;
+    const base = `http://127.0.0.1:${port}`;
+
+    const login = await fetch(`${base}/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        email: 'outbox-demo@example.com',
+        password: OUTBOX_DEMO_PASSWORD,
+      }),
+    });
+    const { access_token: accessToken } = (await login.json()) as { access_token?: string };
+    if (!accessToken) throw new Error(`outbox demo login failed: ${login.status}`);
 
     const key = `demo-outbox-${randomUUID()}`;
     const send = () =>
-      fetch(`http://127.0.0.1:${port}/orders`, {
+      fetch(`${base}/orders`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
           'idempotency-key': key,
-          'x-user-id': DEMO_USER_ID,
+          authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({ items: [{ product_id: Number(DEMO_PRODUCT_ID), quantity: 1 }] }),
       });

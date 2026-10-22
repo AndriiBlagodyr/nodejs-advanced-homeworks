@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AuthModule } from '../auth/auth.module';
 import { Order } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
 import { Product } from '../entities/product.entity';
@@ -10,7 +11,7 @@ import { OrderEventsService } from './order-events.service';
 import { OrdersGateway } from './orders.gateway';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Order, OrderItem, Product, User])],
+  imports: [AuthModule, TypeOrmModule.forFeature([Order, OrderItem, Product, User])],
   providers: [OrdersService, OrderEventsService, OrdersGateway],
   controllers: [OrdersController],
 })

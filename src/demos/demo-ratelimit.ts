@@ -1,5 +1,6 @@
 import { connectStateRedis } from '../redis/clients';
 import { fail, report } from './demo-kit';
+import { ensureEphemeralAuthEnv } from './ephemeral-auth';
 import { bootApp, DEMO_PRODUCT_FIRST_ID, deleteKeys, prepareDb, type RunningApp } from './redis-kit';
 
 const LIMIT = 5;
@@ -17,6 +18,7 @@ async function main(): Promise<void> {
 }
 
 async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
+  ensureEphemeralAuthEnv();
   process.env.RATE_LIMIT_LIMIT = String(LIMIT);
   process.env.RATE_LIMIT_WINDOW_MS = String(WINDOW_MS);
 

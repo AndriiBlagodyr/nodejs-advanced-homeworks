@@ -6,6 +6,7 @@ import {
   Headers,
   HttpException,
   Param,
+  UseGuards,
   ParseIntPipe,
   Patch,
   Post,
@@ -16,6 +17,10 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { Subscription } from 'rxjs';
+import { AuthGuard, bearerToken } from '../auth/auth.guard';
+import { AuthService } from '../auth/auth.service';
+import { CurrentUser } from '../auth/auth.decorators';
+import type { AccessClaims } from '../auth/tokens';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './create-order.dto';
 import { UpdateOrderStatusDto } from './update-order-status.dto';
@@ -26,25 +31,32 @@ export class OrdersController {
   constructor(
     private readonly orders: OrdersService,
     private readonly orderEvents: OrderEventsService,
+    private readonly auth: AuthService,
   ) {}
 
   @Get()
+  @UseGuards(AuthGuard)
   listOrders(
+    @CurrentUser() user: AccessClaims,
     @Query('limit') limit?: number,
     @Query('cursor') cursor?: string,
   ) {
-    return this.orders.findAll(limit ?? 20, cursor);
+    return this.orders.findAllForViewer(user, limit ?? 20, cursor);
   }
 
+  /**
+   * Not behind @UseGuards: a guard's 401 would be thrown after @Res() took
+   * over the response. Same check, done by hand before any headers are sent.
+   */
   @Get(':orderId/events')
   async orderEventsStream(
     @Param('orderId', ParseIntPipe) id: number,
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
-    const userId = sseUserId(req);
     try {
-      await this.orders.requireOwner(id, userId);
+      const user = await this.auth.authenticate(sseToken(req));
+      await this.orders.requireOwner(id, user.sub);
     } catch (err) {
       if (err instanceof HttpException) {
         res.status(err.getStatus()).json(err.getResponse());
@@ -83,27 +95,30 @@ export class OrdersController {
   }
 
   @Get(':orderId')
-  getOrder(@Param('orderId', ParseIntPipe) id: number) {
-    return this.orders.findOne(id);
+  @UseGuards(AuthGuard)
+  getOrder(@Param('orderId', ParseIntPipe) id: number, @CurrentUser() user: AccessClaims) {
+    return this.orders.findOneForViewer(id, user);
   }
 
   @Patch(':orderId/status')
+  @UseGuards(AuthGuard)
   updateStatus(
     @Param('orderId', ParseIntPipe) id: number,
     @Body() dto: UpdateOrderStatusDto,
+    @CurrentUser() user: AccessClaims,
   ) {
-    return this.orders.updateStatus(id, dto.status);
+    return this.orders.updateStatus(id, dto.status, user);
   }
 
   @Post()
+  @UseGuards(AuthGuard)
   async createOrder(
     @Body() dto: CreateOrderDto,
     @Headers('idempotency-key') rawKey: string | undefined,
-    @Headers('x-user-id') rawUserId: string | undefined,
+    @CurrentUser() user: AccessClaims,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const DEFAULT_USER_ID = '1';
-    const userId = rawUserId && /^\d+$/.test(rawUserId) ? rawUserId : DEFAULT_USER_ID;
+    const userId = user.sub;
     const idempotencyKey = rawKey?.trim() || undefined;
     if (idempotencyKey && idempotencyKey.length > 255) {
       throw new BadRequestException('Idempotency-Key must be at most 255 characters');
@@ -117,16 +132,16 @@ export class OrdersController {
   }
 }
 
-function sseUserId(req: Request): string | undefined {
-  const fromQuery = req.query.userId;
-  if (typeof fromQuery === 'string' && fromQuery.length > 0) {
-    return fromQuery;
-  }
-  const fromHeader = req.headers['x-user-id'];
-  if (typeof fromHeader === 'string' && fromHeader.length > 0) {
-    return fromHeader;
-  }
-  return undefined;
+/**
+ * Bearer header first. A browser EventSource cannot set headers, so the same
+ * access token may come as ?access_token= (RFC 6750 §2.3); it is short-lived
+ * and denylisted on logout like any other.
+ */
+function sseToken(req: Request): string | undefined {
+  const fromHeader = bearerToken(req.headers.authorization);
+  if (fromHeader) return fromHeader;
+  const fromQuery = req.query.access_token;
+  return typeof fromQuery === 'string' && fromQuery.length > 0 ? fromQuery : undefined;
 }
 
 function writeSse(res: Response, event: OrderStatusEvent): void {

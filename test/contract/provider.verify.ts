@@ -7,6 +7,7 @@ import { DataSource } from 'typeorm';
 import { AppModule } from '../../src/app.module';
 import { configureApp } from '../../src/configure-app';
 import { createDataSourceOptions } from '../../src/data-source';
+import { ensureEphemeralAuthEnv } from '../../src/demos/ephemeral-auth';
 
 let app: INestApplication;
 let container: StartedPostgreSqlContainer;
@@ -28,6 +29,7 @@ async function setup(): Promise<void> {
   container = await new PostgreSqlContainer('postgres:16-alpine').start();
   const url = container.getConnectionUri();
   process.env.DATABASE_URL = url;
+  ensureEphemeralAuthEnv();
 
   seedDs = new DataSource(createDataSourceOptions({ url, migrationsRun: true }));
   await seedDs.initialize();

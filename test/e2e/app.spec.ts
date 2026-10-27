@@ -80,22 +80,58 @@ async function placeOrder(token: string): Promise<number> {
 }
 
 describe('Auth E2E', () => {
-  it('refresh reuse revokes the whole family', async () => {
-    const { refresh_token: r1 } = await loginPair();
+  function me(token: string) {
+    return supertest(app.getHttpServer()).get('/auth/me').set('Authorization', `Bearer ${token}`);
+  }
+
+  it('refresh reuse revokes the whole family, access tokens included', async () => {
+    const { access_token: a1, refresh_token: r1 } = await loginPair();
     const rotated = await refresh(r1).expect(200);
-    const r2 = rotated.body.refresh_token as string;
+    const { access_token: a2, refresh_token: r2 } = rotated.body as Pair;
+    await me(a2).expect(200);
 
     await refresh(r1).expect(401);
     await refresh(r2).expect(401);
+    await me(a1).expect(401);
+    await me(a2).expect(401);
   });
 
-  it('logout kills the access token (denylist) and the refresh family', async () => {
-    const { access_token: access, refresh_token: r1 } = await loginPair();
-    const server = app.getHttpServer();
-    await supertest(server).get('/auth/me').set('Authorization', `Bearer ${access}`).expect(200);
-    await supertest(server).post('/auth/logout').set('Authorization', `Bearer ${access}`).expect(204);
-    await supertest(server).get('/auth/me').set('Authorization', `Bearer ${access}`).expect(401);
-    await refresh(r1).expect(401);
+  it('logout kills every access token of the login and the refresh family', async () => {
+    const { access_token: a1, refresh_token: r1 } = await loginPair();
+    const { access_token: a2, refresh_token: r2 } = (await refresh(r1).expect(200)).body as Pair;
+    const other = await login();
+    await me(a1).expect(200);
+
+    await supertest(app.getHttpServer())
+      .post('/auth/logout')
+      .set('Authorization', `Bearer ${a2}`)
+      .expect(204);
+    await me(a2).expect(401);
+    await me(a1).expect(401);
+    await refresh(r2).expect(401);
+    await me(other).expect(200);
+  });
+
+  it('logout sweeps expired refresh rows', async () => {
+    const ds = new DataSource(
+      createDataSourceOptions({ url: process.env.DATABASE_URL, migrationsRun: false }),
+    );
+    await ds.initialize();
+    try {
+      await ds.query(
+        `INSERT INTO refresh_tokens (token_hash, family_id, user_id, expires_at)
+         VALUES (repeat('a', 64), gen_random_uuid(), 1, now() - interval '1 second')`,
+      );
+      const access = await login();
+      await supertest(app.getHttpServer())
+        .post('/auth/logout')
+        .set('Authorization', `Bearer ${access}`)
+        .expect(204);
+      const left = await ds.query(`SELECT 1 FROM refresh_tokens WHERE expires_at <= now()`);
+      expect(left).toHaveLength(0);
+    } finally {
+      await ds.destroy();
+    }
   });
 
   it('401 without a token, 403 on someone else\'s order, 200 for the owner', async () => {

@@ -73,6 +73,16 @@ export async function insertOrder(userId: string): Promise<string> {
   }
 }
 
+export async function dbQuery<T = unknown>(sql: string, params: unknown[] = []): Promise<T> {
+  const ds = new DataSource(createDataSourceOptions());
+  await ds.initialize();
+  try {
+    return await ds.query<T>(sql, params);
+  } finally {
+    await ds.destroy();
+  }
+}
+
 export type Running = { app: INestApplication; base: string };
 
 export async function bootApi(): Promise<Running> {

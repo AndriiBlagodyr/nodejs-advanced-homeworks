@@ -26,9 +26,19 @@ from the vault. A dump of the table is not a dump of live sessions.
 Redis from HW-23 is still the cache, the session store, the rate limiter and
 the queue. It is not the denylist: writing `revoked_at` in Postgres and the
 denylist in Redis would be the dual write from HW-22, and logout would not be
-one COMMIT. The grader also does not set `REDIS_URL`. A denylist row stops
-matching at the access token's `exp`, and the next logout deletes expired rows,
-so the table does not grow.
+one COMMIT. The grader also does not set `REDIS_URL`.
+
+**Revocation is per family, not per `jti`.** Every access token carries `fid`.
+`revoked_families` holds a revoked family for `ACCESS_TTL` (10 minutes), the
+longest any access token of it can still live. `authenticate` checks `fid`
+there and `jti` in `access_denylist` in one query.
+
+**Nothing grows forever.** Login and logout sweep expired rows from
+`refresh_tokens`, `access_denylist` and `revoked_families`, using the
+`expires_at` index on each table. Each sweep deletes at most 500 rows per
+table with `FOR UPDATE SKIP LOCKED`, so concurrent logins do not queue
+behind each other. An expired refresh token is rejected by `expires_at`
+anyway, so deleting its row loses nothing.
 
 ### Variables
 
@@ -64,12 +74,12 @@ old token.
 
 If the presented refresh token already has `used_at`, that is the theft
 signal from RFC 9700 §4.14.2. The transaction sets `revoked_at` on every row
-of the family and the log line is `refresh token reuse; family revoked
-family_id=…` (the id only, never the token). Both the thief and the honest
-client are out. Rotation without the family would leave the honest client's
-new token alive. Access tokens already issued in that family are not
-denylisted: they live until `exp`, at most 10 minutes. That is the access TTL
-doing its job.
+of the family and puts the family into `revoked_families`. The log line is
+`refresh token reuse; family revoked family_id=…` (the id only, never the
+token). Both the thief and the honest client are out, refresh and access
+alike. `a1-after-reuse=401` and `a2-after-reuse=401` show the access side:
+the thief does not get to keep the 10 minutes left on their access token.
+Rotation without the family would leave the honest client's new token alive.
 
 There is no grace window. The client serializes refresh: one in-flight promise
 for everyone. A window that handed back the same new pair would make an
@@ -80,15 +90,18 @@ token is treated as theft. That is the tradeoff, and it is why `r1-reuse` is
 ### Why logout is two actions
 
 The refresh token is a row. Logout sets `revoked_at` on its family, and that
-is enough for it. The access token is self-contained and valid until `exp`, so
-logout also inserts its `jti` into `access_denylist` with `expires_at` equal
-to that `exp`. Both writes are the same COMMIT. `after-logout=401` is the
-denylist; `refresh-after-logout=401` is the family. Either one alone leaves a
-usable credential.
+is enough for it. Access tokens are self-contained and valid until `exp`, so
+logout also denylists them. That means the family (`fid` into
+`revoked_families`, covering every access token of this login) and the
+presented `jti` (`access_denylist`, `expires_at` = its `exp`). Everything
+commits together. A `jti`-only denylist is not enough: the access token
+issued before the last refresh has a different `jti` and would still answer
+200. `old-access-after-logout=401` is that case. `refresh-after-logout=401`
+is the refresh family. Either action alone leaves a usable credential.
 
 ### 401, 403, and where ownership is checked
 
-No token, a bad signature, an expired token, or a denylisted `jti` is **401**.
+No token, a bad signature, an expired token, or a revoked `fid`/`jti` is **401**.
 A valid token with the wrong role is **403** (`RolesGuard` on `POST /products`:
 `seller` and `admin` only). A client refreshes on 401 and shows an error on
 403. Swapping them either loops on refresh or logs the user out on every
@@ -154,10 +167,12 @@ shows the names only.
 ```text
 $ npm run demo:auth
 login=200  no-token=401  with-token=200  refresh=200
-logout=204  after-logout=401  refresh-after-logout=401
+logout=204  after-logout=401  old-access-after-logout=401
+refresh-after-logout=401  expired-refresh-swept=1
 
 $ npm run demo:reuse
-login=200  r1-refresh=200  r1-reuse=401  r2-after-reuse=401
+login=200  r1-refresh=200  a2-before-reuse=200  r1-reuse=401
+r2-after-reuse=401  a1-after-reuse=401  a2-after-reuse=401
 
 $ npm run demo:rbac
 anon=401  own=200  foreign=403
@@ -169,7 +184,9 @@ old signature left in place. No signing key is used to build it. A verifier
 that only decoded the payload would return 201 here.
 
 The same invariants run in `npm run test:e2e` (`Auth E2E`): family revocation
-on reuse, logout killing both tokens, 401/403/200 on an order, the list
+on reuse (refresh and access), logout killing every access token of the login
+while another login of the same user keeps working, the sweep of expired
+refresh rows, 401/403/200 on an order, the list
 scoped to the caller, a buyer cancelling but not completing, and the role
 check on products. Tests and the HW-22/23 demos that do not exercise auth
 get a throwaway key pair from `src/demos/ephemeral-auth.ts`, and only when

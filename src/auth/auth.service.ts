@@ -12,6 +12,8 @@ export type TokenPair = {
   expires_in: number;
 };
 
+const SWEEP_BATCH = 500;
+
 type RefreshRow = {
   family_id: string;
   user_id: string;
@@ -70,12 +72,8 @@ export class AuthService {
       if (row.used_at) {
         // Already rotated. A second presentation is the theft signal: the
         // honest client and the thief both hold a token of this family, and
-        // RFC 9700 §4.14.2 says the whole family goes.
-        await m.query(
-          `UPDATE refresh_tokens SET revoked_at = now()
-            WHERE family_id = $1 AND revoked_at IS NULL`,
-          [row.family_id],
-        );
+        // RFC 9700 §4.14.2 says the whole family goes, access tokens included.
+        await this.revokeFamily(m, row.family_id);
         return { kind: 'reuse' as const, familyId: row.family_id };
       }
 
@@ -102,23 +100,21 @@ export class AuthService {
   }
 
   /**
-   * Both effects in one COMMIT. The refresh family is a row; the access token
-   * is not, so its jti is written to the denylist here rather than to Redis.
-   * Two stores would be the dual write from HW-22, and logout would not be atomic.
+   * Both effects in one COMMIT. The refresh family is a row; access tokens are
+   * not, so the family's `fid` goes to the denylist (every access token of the
+   * login, including ones issued before the last refresh) together with the
+   * presented `jti`. All of it is Postgres rather than Redis: two stores would
+   * be the dual write from HW-22, and logout would not be atomic.
    */
   async logout(claims: AccessClaims): Promise<void> {
     await this.dataSource.transaction(async (m) => {
-      await m.query(
-        `UPDATE refresh_tokens SET revoked_at = now()
-          WHERE family_id = $1 AND revoked_at IS NULL`,
-        [claims.fid],
-      );
+      await this.revokeFamily(m, claims.fid);
       await m.query(
         `INSERT INTO access_denylist (jti, expires_at) VALUES ($1, to_timestamp($2))
          ON CONFLICT (jti) DO UPDATE SET expires_at = EXCLUDED.expires_at`,
         [claims.jti, claims.exp],
       );
-      await m.query(`DELETE FROM access_denylist WHERE expires_at <= now()`);
+      await this.sweepExpired(m);
     });
   }
 
@@ -135,20 +131,62 @@ export class AuthService {
     } catch {
       throw new UnauthorizedException('unauthorized');
     }
-    if (await this.isAccessRevoked(claims.jti)) throw new UnauthorizedException('unauthorized');
+    if (await this.isAccessRevoked(claims)) throw new UnauthorizedException('unauthorized');
     return claims;
   }
 
-  async isAccessRevoked(jti: string): Promise<boolean> {
-    const rows = await this.dataSource.query<Array<{ ok: number }>>(
-      `SELECT 1 AS ok FROM access_denylist WHERE jti = $1 AND expires_at > now()`,
-      [jti],
+  async isAccessRevoked(claims: Pick<AccessClaims, 'jti' | 'fid'>): Promise<boolean> {
+    const rows = await this.dataSource.query<Array<{ revoked: boolean }>>(
+      `SELECT EXISTS (SELECT 1 FROM revoked_families
+                       WHERE family_id = $2 AND expires_at > now())
+           OR EXISTS (SELECT 1 FROM access_denylist
+                       WHERE jti = $1 AND expires_at > now()) AS revoked`,
+      [claims.jti, claims.fid],
     );
-    return rows.length > 0;
+    return rows[0]?.revoked === true;
+  }
+
+  /**
+   * Refresh rows get `revoked_at`; the family goes to the access denylist for
+   * ACCESS_TTL, the longest any access token of it issued so far can live.
+   * No new access token can join a revoked family: refresh rejects it.
+   */
+  private async revokeFamily(m: EntityManager, familyId: string): Promise<void> {
+    await m.query(
+      `UPDATE refresh_tokens SET revoked_at = now()
+        WHERE family_id = $1 AND revoked_at IS NULL`,
+      [familyId],
+    );
+    await m.query(
+      `INSERT INTO revoked_families (family_id, expires_at)
+       VALUES ($1, now() + make_interval(secs => $2))
+       ON CONFLICT (family_id) DO UPDATE SET expires_at = EXCLUDED.expires_at`,
+      [familyId, ACCESS_TTL_SEC],
+    );
+  }
+
+  /**
+   * Expired rows are dead weight: an expired refresh token is rejected by
+   * `expires_at` whether or not it is still in the table, and a denylist row
+   * past its TTL no longer matches. Bounded and SKIP LOCKED, so concurrent
+   * logins/logouts share the work instead of queueing on each other.
+   */
+  private async sweepExpired(m: EntityManager): Promise<void> {
+    for (const table of ['refresh_tokens', 'access_denylist', 'revoked_families'] as const) {
+      await m.query(
+        `DELETE FROM ${table} WHERE ctid IN (
+           SELECT ctid FROM ${table} WHERE expires_at <= now()
+            ORDER BY expires_at LIMIT ${SWEEP_BATCH}
+              FOR UPDATE SKIP LOCKED)`,
+      );
+    }
   }
 
   private async issuePair(userId: string, role: Role, familyId: string): Promise<TokenPair> {
-    return this.dataSource.transaction((m) => this.insertPair(m, userId, role, familyId));
+    return this.dataSource.transaction(async (m) => {
+      await this.sweepExpired(m);
+      return this.insertPair(m, userId, role, familyId);
+    });
   }
 
   private async insertPair(

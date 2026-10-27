@@ -1,11 +1,204 @@
+# HW-24 — Auth: access tokens, refresh rotation, 401 vs 403
+
+`POST /orders` no longer accepts a caller-supplied user. Login gives an ES256
+access token and an opaque refresh token. The access token answers "who is
+this?". A role or an order's owner answers "are they allowed?", and that
+answer is not in the signature.
+
+Previous snapshots: `hw-03/` … `hw-16/`, `hw-18/`, `hw-19/`, `hw-22/`, `hw-23/`.
+
+## Auth
+
+### What I chose
+
+**ES256 (P-256).** OWASP marks RS256 as "not recommended" and points at ES256,
+PS256 or EdDSA. P-256 is in `node:crypto`, the keys and signatures are short,
+and verification passes an explicit allowlist `algorithms: ['ES256']`
+(RFC 8725 §3.1). A token cannot switch itself to `HS256` or `none`. There is
+no shared HMAC secret, so the process that verifies tokens cannot sign itself
+a `role: admin`.
+
+**Refresh tokens are random 32-byte strings, not JWTs.** The table stores
+`HMAC-SHA256(pepper, token)`, never the token. The pepper is `REFRESH_TOKEN_PEPPER`
+from the vault. A dump of the table is not a dump of live sessions.
+
+**The denylist is in Postgres, next to the refresh family, in one transaction.**
+Redis from HW-23 is still the cache, the session store, the rate limiter and
+the queue. It is not the denylist: writing `revoked_at` in Postgres and the
+denylist in Redis would be the dual write from HW-22, and logout would not be
+one COMMIT. The grader also does not set `REDIS_URL`.
+
+**Revocation is per family, not per `jti`.** Every access token carries `fid`.
+`revoked_families` holds a revoked family for `ACCESS_TTL` (10 minutes), the
+longest any access token of it can still live. `authenticate` checks `fid`
+there and `jti` in `access_denylist` in one query.
+
+**Nothing grows forever.** Login and logout sweep expired rows from
+`refresh_tokens`, `access_denylist` and `revoked_families`, using the
+`expires_at` index on each table. Each sweep deletes at most 500 rows per
+table with `FOR UPDATE SKIP LOCKED`, so concurrent logins do not queue
+behind each other. An expired refresh token is rejected by `expires_at`
+anyway, so deleting its row loses nothing.
+
+### Variables
+
+| Змінна | Джерело | Навіщо |
+| --- | --- | --- |
+| `JWT_PRIVATE_KEY` | сховище (#11) | base64 PKCS#8 PEM, signs access tokens |
+| `JWT_PUBLIC_KEY` | сховище (#11) | base64 SPKI PEM of the current `kid` |
+| `JWT_KID` | сховище (#11) | `kid` header; the verifier picks the key by it |
+| `JWT_PUBLIC_KEYS` | сховище (#11) | optional JSON `{"old-kid":"<base64 PEM>"}` kept during overlap |
+| `REFRESH_TOKEN_PEPPER` | сховище (#11) | HMAC pepper for refresh-token hashes |
+| `DATABASE_URL` | compose / оточення | dev credentials, not a secret |
+| `REDIS_URL` | compose / оточення | cache (`allkeys-lru`) |
+| `REDIS_QUEUE_URL` | compose / оточення | queue, sessions, rate limits (`noeviction`) |
+
+`npm run start` is a bare `node dist/src/main.js`. It checks these four required
+secrets before Nest opens a database connection, and exits non-zero naming
+whatever is missing. There is no default. It also rejects a key that is not
+EC P-256, and a private/public pair that does not match (it signs a probe and
+verifies it). A mismatched pair would otherwise boot and answer 401 to
+everyone. `npm run start:vault` and
+`demo:auth`, `demo:reuse`, `demo:rbac` go through `scripts/with-secrets.sh`.
+
+### Login, rotation, reuse
+
+`POST /auth/login` checks the password (scrypt) and reads `users.role` from
+the database. It returns an access token (10 minutes: `sub`, `role`, `jti`,
+`fid`, `kid`) and a refresh token (30 days) in a new `family_id`.
+
+`POST /auth/refresh` locks that row (`FOR UPDATE`) and, in the same
+transaction, marks it used and inserts the next token of the same family.
+The new access token's role is read from `users` again, not copied out of the
+old token.
+
+If the presented refresh token already has `used_at`, that is the theft
+signal from RFC 9700 §4.14.2. The transaction sets `revoked_at` on every row
+of the family and puts the family into `revoked_families`. The log line is
+`refresh token reuse; family revoked family_id=…` (the id only, never the
+token). Both the thief and the honest client are out, refresh and access
+alike. `a1-after-reuse=401` and `a2-after-reuse=401` show the access side:
+the thief does not get to keep the 10 minutes left on their access token.
+Rotation without the family would leave the honest client's new token alive.
+
+There is no grace window. The client serializes refresh: one in-flight promise
+for everyone. A window that handed back the same new pair would make an
+immediate second presentation look successful, and a parallel refresh of one
+token is treated as theft. That is the tradeoff, and it is why `r1-reuse` is
+401 with no delay.
+
+### Why logout is two actions
+
+The refresh token is a row. Logout sets `revoked_at` on its family, and that
+is enough for it. Access tokens are self-contained and valid until `exp`, so
+logout also denylists them. That means the family (`fid` into
+`revoked_families`, covering every access token of this login) and the
+presented `jti` (`access_denylist`, `expires_at` = its `exp`). Everything
+commits together. A `jti`-only denylist is not enough: the access token
+issued before the last refresh has a different `jti` and would still answer
+200. `old-access-after-logout=401` is that case. `refresh-after-logout=401`
+is the refresh family. Either action alone leaves a usable credential.
+
+### 401, 403, and where ownership is checked
+
+No token, a bad signature, an expired token, or a revoked `fid`/`jti` is **401**.
+A valid token with the wrong role is **403** (`RolesGuard` on `POST /products`:
+`seller` and `admin` only). A client refreshes on 401 and shows an error on
+403. Swapping them either loops on refresh or logs the user out on every
+foreign page.
+
+Ownership is not a guard. `AuthGuard` runs before the order is loaded and does
+not know `user_id`. `GET /orders/:id` loads the row in `OrdersService.findOneForViewer`
+and then compares `order.userId` to `sub`. A missing order is 404. Someone
+else's order is 403. A `WHERE user_id = $me` would hide the row and answer
+404, which is not what this check is for. The guard authenticates. The service,
+which already has the row, authorizes.
+
+In this domain, orders are the owned resource and products are the privileged
+write. The same boundary covers every way into an order:
+
+- `GET /orders` is a list, so there the filter *is* `WHERE user_id = $me`.
+  An admin sees all orders.
+- `PATCH /orders/:id/status`: the owner may only set `cancelled`, and any
+  other status is 403. An admin may set any status.
+- SSE `GET /orders/:id/events` and the WebSocket `join` authenticate with the
+  same access token. The WebSocket token goes in the handshake as
+  `auth.token`. SSE takes the `Authorization` header, or `?access_token=` because
+  `EventSource` cannot set headers. Then they call the same
+  `OrdersService.requireOwner`. The old `x-user-id` and `userId` in the message
+  body are gone. `scripts/realtime-demo.mjs` needs `ACCESS_TOKEN`.
+- `POST /session` (HW-23) is behind `AuthGuard` and takes the user from `sub`.
+
+Seed users have no password, so they cannot log in. Demos and tests create
+their own users.
+
+### The role in the token is a cache
+
+`users.role` is read at login and at refresh. It is not read on every request.
+Demote an admin and their current access token still says `admin` until `exp`,
+at most 10 minutes. The next refresh picks up the new role. That window is the
+price of not hitting the database on every call. It is not a surprise, and it
+is not fixed by a longer denylist.
+
+### Overlap rotation and `kid`
+
+A new key signs new tokens: `JWT_KID` plus `JWT_PRIVATE_KEY`. While old access
+tokens are still inside their 10 minutes, `JWT_PUBLIC_KEYS` keeps the previous
+public key under its own `kid`. The verifier looks up `header.kid` and does
+not try every key. Without `kid` there is no overlap, because the verifier
+would not know which key signed the token. When the old tokens have expired,
+drop the old `kid`. Startup logs `auth signing kid=… fingerprint=…` and never
+the key.
+
+The fingerprint is SHA-256 of the SPKI DER, first 16 hex characters. Dev and
+prod are different keys:
+
+| Environment | kid | fingerprint |
+| --- | --- | --- |
+| dev | `dev-2026-10` | `cc5b95404c60a21a` |
+| prod | `prod-2026-10` | `3a78e84114c26196` |
+
+The private keys are not in the repo. They are in `secrets/auth-dev.env` and
+`secrets/auth-prod.env` (gitignored) to be copied into the vault. `secrets/auth.env.example`
+shows the names only.
+
+### Demos, from my runs
+
+```text
+$ npm run demo:auth
+login=200  no-token=401  with-token=200  refresh=200
+logout=204  after-logout=401  old-access-after-logout=401
+refresh-after-logout=401  expired-refresh-swept=1
+
+$ npm run demo:reuse
+login=200  r1-refresh=200  a2-before-reuse=200  r1-reuse=401
+r2-after-reuse=401  a1-after-reuse=401  a2-after-reuse=401
+
+$ npm run demo:rbac
+anon=401  own=200  foreign=403
+role-denied=403  role-allowed=201  tampered=401
+```
+
+`tampered` is the same access token with `role` rewritten to `admin` and the
+old signature left in place. No signing key is used to build it. A verifier
+that only decoded the payload would return 201 here.
+
+The same invariants run in `npm run test:e2e` (`Auth E2E`): family revocation
+on reuse (refresh and access), logout killing every access token of the login
+while another login of the same user keeps working, the sweep of expired
+refresh rows, 401/403/200 on an order, the list
+scoped to the caller, a buyer cancelling but not completing, and the role
+check on products. Tests and the HW-22/23 demos that do not exercise auth
+get a throwaway key pair from `src/demos/ephemeral-auth.ts`, and only when
+the variables are unset. `main.ts` never generates keys.
+
+---
+
 # HW-23 — Redis: cache, sessions, rate limits, queue
 
 Redis takes four jobs in the Marketplace: a cache for the product card, the
 session store, a shared rate limiter, and a BullMQ queue for receipts and the
 outbox retention sweep. Postgres stays the source of truth for everything.
-
-Previous snapshots: `hw-03/` … `hw-16/`, `hw-18/`, `hw-19/`, `hw-22/`
-(transactional outbox; still running here, see the second half of this file).
 
 ## Redis: кеш, сесії, ліміти, черга
 
@@ -340,26 +533,41 @@ no matter how careful the relay is.
 
 ## Grading
 
+One-time ES256 key pair and pepper for the run. The real signing key stays in
+the vault; this pair lives only in a temp dir that is deleted right after it is
+exported. The DB password is read from the local `db` container, so no
+connection string with a password is written down here.
+
 ```bash
 docker compose up -d --wait
-export DATABASE_URL=postgres://app:marketplace_dev_password@127.0.0.1:5432/marketplace
+export DATABASE_URL="postgres://app:$(docker compose exec -T db printenv POSTGRES_PASSWORD)@127.0.0.1:5432/marketplace"
 export BROKER_URL=amqp://app:app@127.0.0.1:5672
 export REDIS_URL=redis://127.0.0.1:6390
 export REDIS_QUEUE_URL=redis://127.0.0.1:6391
 export SKIP_VAULT=1
+KEYS="$(mktemp -d)"
+node -e 'const {generateKeyPairSync}=require("node:crypto");
+const k=generateKeyPairSync("ec",{namedCurve:"P-256",
+  privateKeyEncoding:{type:"pkcs8",format:"pem"},
+  publicKeyEncoding:{type:"spki",format:"pem"}});
+const fs=require("node:fs"), dir=process.argv[1];
+fs.writeFileSync(dir+"/priv.b64",Buffer.from(k.privateKey).toString("base64"),{mode:0o600});
+fs.writeFileSync(dir+"/pub.b64",Buffer.from(k.publicKey).toString("base64"));' "$KEYS"
+export JWT_KID=grader
+export JWT_PRIVATE_KEY="$(cat "$KEYS/priv.b64")"
+export JWT_PUBLIC_KEY="$(cat "$KEYS/pub.b64")"
+export REFRESH_TOKEN_PEPPER="$(openssl rand -hex 32)"
+rm -rf "$KEYS"
 npm ci
-npm run demo:cache
-npm run demo:session
-npm run demo:ratelimit
-npm run demo:queue
-# HW-22, still passing:
-npm run demo:outbox
-npm run demo:crash-write
-npm run demo:crash-relay
+npm run demo:auth
+npm run demo:reuse
+npm run demo:rbac
 ```
 
 Each demo compiles first (`predemo:*` runs `tsc`) and applies pending
-migrations itself, so no separate `build`/`migrate` step is required.
-`5432` is PgBouncer (transaction pooling) in front of Postgres; `5672` is AMQP
-(`15672` is only the management UI); `6390` is the cache Redis, `6391` the
-queue/state Redis. None of the ports are in 22300–22399.
+migrations itself. `5432` is PgBouncer in front of Postgres. `5672` is AMQP.
+`6390` is the cache Redis and `6391` the queue Redis, still used by the HW-23
+demos (`demo:cache`, `demo:session`, `demo:ratelimit`, `demo:queue`) and the
+HW-22 ones (`demo:outbox`, `demo:crash-write`, `demo:crash-relay`). None of
+the ports are in 22300–22399. `npm run start` without the four secrets exits
+non-zero and names the missing variable; it does not open the database first.

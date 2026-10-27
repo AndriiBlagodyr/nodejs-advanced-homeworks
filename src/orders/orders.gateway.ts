@@ -14,6 +14,7 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Subscription } from 'rxjs';
+import { AuthService } from '../auth/auth.service';
 import { OrderEventsService } from './order-events.service';
 import { OrdersService } from './orders.service';
 
@@ -27,6 +28,7 @@ export class OrdersGateway implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly events: OrderEventsService,
     private readonly orders: OrdersService,
+    private readonly auth: AuthService,
   ) {}
 
   onModuleInit(): void {
@@ -44,16 +46,17 @@ export class OrdersGateway implements OnModuleInit, OnModuleDestroy {
     @ConnectedSocket() client: Socket,
     @MessageBody() body: { orderId?: number },
   ): Promise<{ ok: boolean; error?: string; room?: string }> {
-    const userId = String(
-      client.handshake.auth?.userId ?? client.handshake.query?.userId ?? '',
-    );
     const orderId = Number(body?.orderId);
     if (!Number.isInteger(orderId) || orderId < 1) {
       return { ok: false, error: 'invalid_order' };
     }
 
     try {
-      await this.orders.requireOwner(orderId, userId || undefined);
+      // The identity is the access token from the handshake, never a userId
+      // the client claims. Checked per join, so a logout also stops new joins.
+      const token = client.handshake.auth?.token;
+      const user = await this.auth.authenticate(typeof token === 'string' ? token : undefined);
+      await this.orders.requireOwner(orderId, user.sub);
     } catch (err) {
       if (err instanceof UnauthorizedException) {
         return { ok: false, error: 'unauthorized' };

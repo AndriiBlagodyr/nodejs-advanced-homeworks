@@ -1,3 +1,282 @@
+# HW-26 — Files: presigned uploads, multipart resume, CDN without invalidation
+
+Files (product photos, avatars, HW-15 dumps) no longer touch a server disk.
+The API decides who may upload what and under which key. The bytes go from
+the client straight into S3-compatible storage. Public assets are served by
+a cache in front of a private bucket.
+
+Previous snapshots: `hw-03/` … `hw-16/`, `hw-18/`, `hw-19/`, `hw-22/`, `hw-23/`, `hw-24/`.
+
+## Files
+
+### Pieces
+
+| Piece | Where |
+| --- | --- |
+| `files` table (key, owner_id, status, size, upload_id, part_size, part_count, etag, idempotency_key) | `src/migrations/1726700000000-Files.ts` |
+| intent / resume / commit / download | `src/files/files.service.ts`, `files.controller.ts` |
+| allowlist, TTLs, threshold, part size, magic bytes | `src/files/policy.ts` |
+| the only S3 client (presign, HeadObject, ListParts, Complete, purge) | `src/storage/storage.ts` |
+| CDN edge (local CloudFront + OAC stand-in) | `src/cdn/edge.ts`, run with `npm run edge` |
+| content-hashed asset publishing | `src/cdn/assets.ts` |
+| emulator | `storage` in `docker-compose.yml`: MinIO, `:22650`, tmpfs `size=1g` |
+
+The emulator is `pgsty/minio`, pinned to `RELEASE.2026-08-04T00-00-00Z`. That
+is a maintained community build of MinIO. Docker Hub and quay.io no longer
+serve `minio/minio`. The data lives in tmpfs, so `docker compose down` leaves
+a clean slate. The `1g` size keeps a demo series from running out of space.
+
+### Variables
+
+| Змінна | Джерело | Навіщо |
+| --- | --- | --- |
+| `STORAGE_ACCESS_KEY` | сховище (#11) | storage access key: read and write every file in the bucket |
+| `STORAGE_SECRET_KEY` | сховище (#11) | its secret |
+| `STORAGE_ENDPOINT` | compose / оточення | `http://127.0.0.1:22650` for MinIO; empty means AWS S3 |
+| `STORAGE_REGION` | compose / оточення | `us-east-1` unless set |
+| `STORAGE_BUCKET` | compose / оточення | `hw26-files`; not a secret |
+| `EDGE_PORT` | оточення | port of `npm run edge` (8088) |
+
+The HW-24 auth variables (`JWT_*`, `REFRESH_TOKEN_PEPPER`) are still
+required, because `intent` and `commit` sit behind the same `AuthGuard`. The
+demos go through `scripts/with-secrets.sh dev`, like everything else. To use
+the vault, add `STORAGE_ACCESS_KEY` and `STORAGE_SECRET_KEY` to the `dev`
+environment in Infisical. `npm run start` refuses to boot without the storage
+variables and names the missing ones. Tests and the older demos boot
+`AppModule` directly. Without storage they simply have no file endpoints.
+
+The leak cost differs from `DATABASE_URL`. A leaked storage key can read and
+write every file without touching our network. In production the app runs
+under a role scoped to this bucket, not a long-lived key.
+
+### The upload contract
+
+1. `POST /uploads/intent` `{contentType, size, filename?}` sits behind the
+   HW-24 `AuthGuard`. `contentType` must be in the allowlist (PNG, JPEG,
+   WebP, PDF, gzip), or the answer is 415. Each type has its own size cap,
+   and above it the answer is 413.
+   - The server builds the key as `uploads/{userId}/{uuid}.{ext}`. The
+     extension comes from the allowlist. `filename` is accepted and ignored,
+     so `../../etc/passwd` never reaches the key.
+   - A `PENDING` row is inserted. An `Idempotency-Key` header (HW-22) makes a
+     double tap return the same file with fresh URLs instead of a second
+     object.
+2. The client `PUT`s the bytes to the presigned URL. Our process is not on
+   that path. The signature covers the key, `Content-Type` and
+   `Content-Length`. Another key in the path is 403 (`tampered`), and so is
+   the right key with more bytes than declared (`oversized-put`). Storage
+   enforces the size before commit ever sees the object. Part URLs sign
+   their exact part length the same way.
+3. `POST /uploads/:id/commit` checks the object, not the client's claim:
+   - `HeadObject` must find it, or the answer is 409.
+   - Its size must equal the declared size, or the object is deleted and
+     the answer is 409.
+   - Its first 16 bytes must match the declared type, or the object is
+     deleted and the answer is 422. `Content-Type` is the client's word;
+     the magic bytes are the file's.
+
+   Only then does the row become `COMPLETED`. Someone else's file is 403
+   (checked on the loaded row, as in HW-24).
+4. `GET /files/:id` answers 302 to a presigned GET that lives 60 seconds.
+   Nobody gets a long-lived download link. The guard runs on every request,
+   so the API stays on the authorization path but off the data path.
+
+The S3 client is created with `requestChecksumCalculation: 'WHEN_REQUIRED'`.
+Otherwise a presigned PUT, signed before any body exists, would carry the
+CRC32 of empty data. Logs carry `file_id` and the key, never a URL: a
+presigned URL in a log line is access handed out until it expires.
+
+### How long presigned URLs live
+
+| URL | TTL | Why |
+| --- | --- | --- |
+| single PUT | 5 min | an avatar or product-photo form uploads right after intent. A single PUT is at most 8 MiB (above that it is multipart), about a minute at 1 Mbit/s, so 5 minutes leaves room for one retry and a slow start |
+| multipart part | 15 min | one part (5 MiB and up), not the whole file; a resume asks for fresh URLs, so a long upload never needs a long URL |
+| download (302) | 60 s | the browser follows the redirect at once |
+
+A presigned URL cannot be revoked. It has no `jti` and no registry, so of the
+HW-24 revocation strategies only "short" works. Also, `expiresIn: 7 days`
+does not survive production. A URL dies with the credentials that signed it,
+and a role session (STS) usually lasts an hour.
+
+`expired=403` in the demo uses the same `Storage.presignPut` the API calls,
+with a 2-second TTL. The same URL gives 200 while it is fresh and 403 after,
+so the demo does not wait five minutes.
+
+### Multipart: threshold, part size, resume
+
+- **Threshold is computed:** `multipartThreshold()` in `src/files/policy.ts`.
+  It answers: how much can a dropped single PUT cost to redo from zero?
+  - The budget is 64 s on the slowest link we design for: a 1 Mbit/s
+    mobile uplink, about 128 KiB/s.
+  - That gives 64 × 128 KiB = **8 MiB**, which is also the AWS CLI default
+    (`multipart_threshold = 8MB`).
+  - The result is never below two minimum parts (5 MiB + 1 MiB). Otherwise a
+    "multipart" file would be one part plus a stub, and resume would gain
+    nothing.
+- **Part size is computed:** `max(5 MiB, ceil(size / 10 000) rounded up to
+  a MiB)`. At most 10,000 parts, each 5 MiB to 5 GiB except the last. A
+  fixed 5 MiB fails above about 48.8 GiB; the computed size gives 6 MiB at
+  50 GiB and 525 MiB at 5 TiB (`test/unit/files-policy.spec.ts`).
+- **Resume:** `POST /uploads/:id/resume` asks the storage with `ListParts`
+  which parts it already has. It returns fresh URLs only for the missing
+  ones. The new process has no memory of the old one, and needs none. If
+  the upload was already aborted, by the orphan sweep or the lifecycle
+  rule, the answer is 410, and the client starts a new intent.
+- **Commit:** `CompleteMultipartUpload` uses the part list from `ListParts`,
+  not from the client. Each part's size is checked against the plan first,
+  so a wrong part is a 409 rather than `EntityTooSmall`. A second,
+  concurrent commit finds the upload already completed and falls through to
+  `HeadObject`, so it does not fail with a 500.
+
+Size is only one of the four multipart benefits in the S3 docs. The others
+are faster upload through parallel parts, pause and resume, and starting
+before the final size is known. This demo is about resume.
+
+A multipart ETag is not an MD5. It is the MD5 of the parts' MD5s, plus `-N`
+for the number of parts. Code that compares it with a local MD5 breaks
+silently.
+
+### CDN: which form, and the AWS policy
+
+**Local form.** `src/cdn/edge.ts` is about 40 lines of logic:
+- It reads the private bucket with its own credentials, through the same
+  SDK client, and keeps an LRU in memory.
+- It answers with `X-Cache: HIT|MISS`.
+- It coalesces concurrent misses into one origin fetch.
+- It serves `assets/` only; user uploads never go through it.
+- It keeps objects of at most 10 MiB in memory, and answers 400 to a
+  malformed path.
+
+That is the OAC idea: the cache reaches storage, the public reaches the
+cache. The bucket has no policy at all, so an anonymous GET straight at
+storage is 403. Locally the edge reuses the app's storage key. In
+production it gets its own identity, allowed only `s3:GetObject` on
+`assets/*`, which is what the OAC policy below grants CloudFront.
+
+What the edge caches, and for how long, comes from the object's own
+`Cache-Control`. `publishAsset` sets that header when it uploads the asset:
+`public, max-age=31536000, immutable`. An object uploaded without it is
+never cached (`no-cache-control-hit=0` in the demo).
+
+**AWS form:** CloudFront with Origin Access Control and this bucket policy.
+The `AWS:SourceArn` condition is what limits access to *this* distribution;
+without it, any CloudFront distribution in the world could read the bucket.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowCloudFrontOACReadAssets",
+      "Effect": "Allow",
+      "Principal": { "Service": "cloudfront.amazonaws.com" },
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::hw26-files/assets/*",
+      "Condition": {
+        "StringEquals": {
+          "AWS:SourceArn": "arn:aws:cloudfront::111122223333:distribution/EDFDVBD6EXAMPLE"
+        }
+      }
+    }
+  ]
+}
+```
+
+Leave Block Public Access on. This is a service-principal grant, not a
+public one. For private content (paid downloads), the plan is CloudFront
+signed URLs or signed cookies. The signing key goes in the vault, because
+whoever holds it can grant access to everything in the distribution.
+
+### Updates without invalidation
+
+A deploy publishes `app.css` as `assets/app.<sha256[0..8]>.css`. New content
+gets a new name, the HTML points at the new URL, and the old cache entry is
+never asked for again. Nothing is invalidated. AWS itself recommends
+versioned file names over invalidation for files that change often.
+`old-url-still-hit=1` shows the old entry is still in the cache and harms
+nobody.
+
+### Hygiene: orphans and unfinished uploads
+
+- **Orphan files.** An intent that is never committed leaves a `PENDING`
+  row, and maybe an object or unfinished parts. `src/files/orphans.ts`
+  sweeps `PENDING` rows older than a day, using the partial index
+  `idx_files_pending_created_at`:
+  - `AbortMultipartUpload`, then `DeleteObject`, then delete the row.
+  - Storage goes first and the row last, so a crash in between is retried
+    on the next sweep.
+  - `FOR UPDATE SKIP LOCKED` lets two workers share the work.
+
+  It runs as the BullMQ scheduler `files-orphan-sweep`, hourly, in the HW-23
+  worker (`npm run worker`) when storage is configured. `demo:upload` ages
+  its never-committed intent by two days, runs the sweep, and prints
+  `orphan-swept=1`.
+- **Unfinished multipart uploads are billed** although no object exists and
+  the console does not show them. On AWS the fix is the lifecycle rule
+  `AbortIncompleteMultipartUpload: 7 days`. `npm run storage:setup` tries to
+  install it. MinIO rejects that rule (`InvalidArgument`) and instead cleans
+  stale uploads itself (`stale_uploads_expiry=24h`), so the script prints
+  `abort-incomplete-multipart-rule=0` locally. "Delete everything older than
+  30 days" does not touch these uploads; it is a different action.
+- **The list of a user's files is the `files` table,** not a bucket listing.
+  A listing is paid and slow, at 1,000 keys per call.
+- **Backups (HW-15).** Their destination is now this bucket, and lifecycle
+  makes it cheap. Two caveats: Glacier breaks the RTO, because the object
+  must be restored first, and lifecycle does not verify a backup. The
+  restore drill stays.
+
+### Demos, from my runs
+
+Each demo cleans its own state first:
+- `ListMultipartUploads` → `AbortMultipartUpload` and delete for its users'
+  prefixes, or `assets/` for `demo:cdn`;
+- then the users, whose `files` rows are deleted with them.
+
+Upload and resume are done by child processes whose environment is only
+`PATH`. They print `env-keys=0` themselves. A demo kills any child still
+running when it exits, the Node version of `trap … EXIT`. The API and the
+edge listen on port 0, so every run gets its own free port and a second run
+never hits `EADDRINUSE`.
+
+```text
+$ npm run demo:upload
+intent=200  key-from-server=1  intent-idempotent=1  put-ttl-sec=300
+tampered=403  oversized-put=403  commit-without-bytes=409
+api-alive=0  put-env-keys=0  put-offline=200
+foreign-commit=403  commit=200  status-completed=1
+download=302  download-body-match=1  expiry-probe-fresh=200  expired=403
+orphan-swept=1
+
+$ npm run demo:multipart        # same numbers on the second run
+file-bytes=12582912  part-size-mib=5  parts=3  intent=200  uploader-env-keys=0
+first-process-killed=1  parts-before-crash=2  head-before-complete=404
+resumed-parts=1  complete=200  size-match=1  etag-multipart=1
+
+$ npm run demo:cdn
+direct=403  edge-miss=200  edge-miss-x-cache-miss=1  edge-hit=200  cache-hit=1
+cache-control-immutable=1  no-cache-control-hit=0
+new-name=1  new-url=200  content-changed=1  old-url-still-hit=1
+invalidations=0  origin-fetches=4
+```
+
+What the main lines prove:
+- `demo:upload`:
+  - `api-alive=0` with `put-offline=200`: the API was closed (a raw TCP
+    probe confirms it), and a keyless process still got the bytes in.
+  - `tampered=403`: the same signature with another key in the path fails,
+    so the signature covers the path.
+  - After the PUT, the API comes back on a different port, because a pooled
+    socket to the old port would be dead.
+- `demo:multipart`: process A is killed with SIGKILL after two parts.
+  Process B uploads only the third. Before Complete, `HeadObject` is 404
+  even though two parts are stored.
+- `demo:cdn`: `origin-fetches=4` breaks down as follows. `v1` was fetched
+  once and then served twice from the cache. The object without
+  `Cache-Control` was fetched both times. `v2` was fetched once.
+
+---
+
 # HW-24 — Auth: access tokens, refresh rotation, 401 vs 403
 
 `POST /orders` no longer accepts a caller-supplied user. Login gives an ES256
@@ -533,13 +812,21 @@ no matter how careful the relay is.
 
 ## Grading
 
-One-time ES256 key pair and pepper for the run. The real signing key stays in
-the vault; this pair lives only in a temp dir that is deleted right after it is
+The storage is the local MinIO from `docker-compose.yml` (port `22650`). Its
+dev credentials are already in the compose file and are not a secret. No AWS
+account is needed. Uploads run under the HW-24 guards, so the block also
+makes a one-time ES256 key pair and pepper. The real signing key stays in the
+vault. This pair lives only in a temp dir that is deleted right after it is
 exported. The DB password is read from the local `db` container, so no
 connection string with a password is written down here.
 
 ```bash
 docker compose up -d --wait
+export STORAGE_ENDPOINT=http://127.0.0.1:22650
+export STORAGE_REGION=us-east-1
+export STORAGE_ACCESS_KEY=hw26user
+export STORAGE_SECRET_KEY=hw26secretpass
+export STORAGE_BUCKET=hw26-files
 export DATABASE_URL="postgres://app:$(docker compose exec -T db printenv POSTGRES_PASSWORD)@127.0.0.1:5432/marketplace"
 export BROKER_URL=amqp://app:app@127.0.0.1:5672
 export REDIS_URL=redis://127.0.0.1:6390
@@ -559,15 +846,20 @@ export JWT_PUBLIC_KEY="$(cat "$KEYS/pub.b64")"
 export REFRESH_TOKEN_PEPPER="$(openssl rand -hex 32)"
 rm -rf "$KEYS"
 npm ci
-npm run demo:auth
-npm run demo:reuse
-npm run demo:rbac
+npm run demo:upload
+npm run demo:multipart
+npm run demo:multipart
+npm run demo:cdn
 ```
 
-Each demo compiles first (`predemo:*` runs `tsc`) and applies pending
-migrations itself. `5432` is PgBouncer in front of Postgres. `5672` is AMQP.
+Each demo compiles first (`predemo:*` runs `tsc`), applies pending migrations
+and creates the bucket if it is missing. It leaves the bucket private, with no
+bucket policy. The HW-24 demos (`demo:auth`, `demo:reuse`, `demo:rbac`) run
+under the same exports. `5432` is PgBouncer in front of Postgres. `5672` is AMQP.
 `6390` is the cache Redis and `6391` the queue Redis, still used by the HW-23
 demos (`demo:cache`, `demo:session`, `demo:ratelimit`, `demo:queue`) and the
 HW-22 ones (`demo:outbox`, `demo:crash-write`, `demo:crash-relay`). None of
-the ports are in 22300–22399. `npm run start` without the four secrets exits
-non-zero and names the missing variable; it does not open the database first.
+the ports are in 22300–22399. `22650` is the S3 API of the `storage` service
+and `22651` its console. `npm run start` without the auth or storage secrets
+exits non-zero and names every missing variable; it does not open the
+database first.

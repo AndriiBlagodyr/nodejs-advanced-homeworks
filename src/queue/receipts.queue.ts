@@ -1,12 +1,16 @@
 import { type Job, type JobsOptions, Queue, UnrecoverableError } from 'bullmq';
 import type Redis from 'ioredis';
 import type { Pool } from 'pg';
+import { ORPHAN_SWEEP_INTERVAL_MS, sweepOrphanFiles } from '../files/orphans';
 import { PURGE_INTERVAL_MS, purgeOutbox } from '../outbox/retention';
+import type { Storage } from '../storage/storage';
 
 export const RECEIPTS_QUEUE = 'receipts';
 export const JOB_SEND_RECEIPT = 'send-receipt';
 export const JOB_OUTBOX_PURGE = 'outbox-purge';
 export const OUTBOX_PURGE_SCHEDULER = 'outbox-purge';
+export const JOB_FILES_ORPHAN_SWEEP = 'files-orphan-sweep';
+export const FILES_ORPHAN_SCHEDULER = 'files-orphan-sweep';
 
 /**
  * removeOnComplete is an age, not `true`: a removed job no longer counts as a
@@ -59,7 +63,24 @@ export function upsertOutboxPurgeScheduler(queue: Queue, everyMs = PURGE_INTERVA
   );
 }
 
-export function createReceiptsProcessor(deps: { pool: Pool }) {
+export function upsertFilesOrphanScheduler(queue: Queue, everyMs = ORPHAN_SWEEP_INTERVAL_MS) {
+  return queue.upsertJobScheduler(
+    FILES_ORPHAN_SCHEDULER,
+    { every: everyMs },
+    {
+      name: JOB_FILES_ORPHAN_SWEEP,
+      data: {},
+      opts: {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5000, jitter: 0.5 },
+        removeOnComplete: { count: 100 },
+        removeOnFail: { count: 100 },
+      },
+    },
+  );
+}
+
+export function createReceiptsProcessor(deps: { pool: Pool; storage?: Storage }) {
   return async (job: Job): Promise<unknown> => {
     switch (job.name) {
       case JOB_SEND_RECEIPT: {
@@ -73,6 +94,9 @@ export function createReceiptsProcessor(deps: { pool: Pool }) {
       }
       case JOB_OUTBOX_PURGE:
         return purgeOutbox(deps.pool);
+      case JOB_FILES_ORPHAN_SWEEP:
+        if (!deps.storage) throw new UnrecoverableError('files sweep needs storage');
+        return sweepOrphanFiles(deps.pool, deps.storage);
       default:
         throw new UnrecoverableError(`unknown job ${job.name}`);
     }

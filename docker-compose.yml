@@ -121,6 +121,26 @@ services:
       timeout: 3s
       retries: 20
 
+  # S3-compatible object storage. Dev root credentials, not a secret. The app gets
+  # its keys from the vault. tmpfs: every `down` is a clean slate; 1g so a demo
+  # series never runs it out of space.
+  storage:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    command: ["minio", "server", "/data", "--address", ":9000", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: hw26user
+      MINIO_ROOT_PASSWORD: hw26secretpass
+    ports:
+      - "22650:9000"
+      - "22651:9001"
+    tmpfs:
+      - /data:size=1g
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/ready"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
 volumes:
   postgres_data:
   pact_db_data:

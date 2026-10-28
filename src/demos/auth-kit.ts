@@ -97,9 +97,9 @@ export async function call(
   base: string,
   method: string,
   path: string,
-  opts: { token?: string; body?: unknown } = {},
+  opts: { token?: string; body?: unknown; headers?: Record<string, string> } = {},
 ): Promise<{ status: number; body: Record<string, unknown> }> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...opts.headers };
   if (opts.body !== undefined) headers['content-type'] = 'application/json';
   if (opts.token) headers.authorization = `Bearer ${opts.token}`;
   const res = await fetch(`${base}${path}`, {
@@ -117,6 +117,13 @@ export async function call(
     }
   }
   return { status: res.status, body };
+}
+
+export async function loginAs(base: string, email: string): Promise<string> {
+  const res = await call(base, 'POST', '/auth/login', { body: { email, password: DEMO_PASSWORD } });
+  const token = String(res.body.access_token ?? '');
+  if (!token) throw new Error(`login failed for ${email} (status ${res.status})`);
+  return token;
 }
 
 /** Same three lines the brief shows: new payload, old signature. No key involved. */

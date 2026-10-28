@@ -19,6 +19,7 @@ import { OutboxAndInbox1726300000000 } from './migrations/1726300000000-OutboxAn
 import { OutboxRetryAndRetention1726400000000 } from './migrations/1726400000000-OutboxRetryAndRetention';
 import { Auth1726500000000 } from './migrations/1726500000000-Auth';
 import { AuthFamilyDenylist1726600000000 } from './migrations/1726600000000-AuthFamilyDenylist';
+import { Files1726700000000 } from './migrations/1726700000000-Files';
 
 function postgresConnection(): Record<string, string | number | undefined> {
   if (process.env.DB_URL || process.env.DATABASE_URL) {
@@ -62,6 +63,7 @@ export function createDataSourceOptions(
       OutboxRetryAndRetention1726400000000,
       Auth1726500000000,
       AuthFamilyDenylist1726600000000,
+      Files1726700000000,
     ],
     ...overrides,
   } as DataSourceOptions;

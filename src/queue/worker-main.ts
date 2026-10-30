@@ -5,8 +5,11 @@ import {
   createReceiptsProcessor,
   createReceiptsQueue,
   RECEIPTS_QUEUE,
+  upsertFilesOrphanScheduler,
   upsertOutboxPurgeScheduler,
 } from './receipts.queue';
+import { storageConfigured } from '../storage/config';
+import { storageFromEnv } from '../storage/storage';
 
 async function main(): Promise<void> {
   const pool = createPool();
@@ -15,8 +18,10 @@ async function main(): Promise<void> {
 
   const queue = createReceiptsQueue(producerConn);
   await upsertOutboxPurgeScheduler(queue);
+  const storage = storageConfigured() ? storageFromEnv() : undefined;
+  if (storage) await upsertFilesOrphanScheduler(queue);
 
-  const worker = new Worker(RECEIPTS_QUEUE, createReceiptsProcessor({ pool }), {
+  const worker = new Worker(RECEIPTS_QUEUE, createReceiptsProcessor({ pool, storage }), {
     connection: workerConn,
     concurrency: 5,
   });

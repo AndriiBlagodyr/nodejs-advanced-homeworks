@@ -1,0 +1,154 @@
+{
+  "consumer": {
+    "name": "MarketplaceFrontend"
+  },
+  "interactions": [
+    {
+      "description": "a request for product 1",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "product 1 exists"
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "path": "/products/1"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "id": 1,
+            "name": "Widget",
+            "price_cents": 500
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.name": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.price_cents": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for products",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "products exist"
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "path": "/products"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "items": [
+              {
+                "id": 1,
+                "name": "Widget",
+                "price_cents": 500
+              }
+            ],
+            "next_cursor": null
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.items": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.items[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.items[*].name": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.items[*].price_cents": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    }
+  ],
+  "metadata": {
+    "pact-js": {
+      "version": "17.1.4"
+    },
+    "pactRust": {
+      "ffi": "0.5.8",
+      "models": "1.3.16"
+    },
+    "pactSpecification": {
+      "version": "4.0"
+    }
+  },
+  "provider": {
+    "name": "MarketplaceAPI"
+  }
+}

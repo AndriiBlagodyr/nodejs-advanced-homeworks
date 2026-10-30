@@ -1,15 +1,25 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { loadAuthConfig } from './auth/config';
+import { AUTH_SECRET_VARS, loadAuthConfig } from './auth/config';
+import { loadStorageConfig, missingStorageVars } from './storage/config';
 import { configureApp } from './configure-app';
 
 async function bootstrap(): Promise<void> {
   // Before NestFactory: that opens the database, and a connection error would
   // hide the name of the missing secret.
+  const missing = [
+    ...AUTH_SECRET_VARS.filter((name) => !process.env[name]?.trim()),
+    ...missingStorageVars(),
+  ];
+  if (missing.length > 0) {
+    console.error(`missing required secret: ${missing.join(', ')}`);
+    process.exit(1);
+  }
   let auth;
   try {
     auth = loadAuthConfig();
+    loadStorageConfig();
   } catch (err) {
     console.error(err instanceof Error ? err.message : err);
     process.exit(1);

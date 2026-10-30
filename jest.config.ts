@@ -21,6 +21,11 @@ const config: Config = {
   projects: [
     {
       ...shared,
+      displayName: 'unit',
+      testMatch: ['<rootDir>/test/unit/**/*.spec.ts'],
+    },
+    {
+      ...shared,
       displayName: 'integration',
       testMatch: ['<rootDir>/test/integration/**/*.spec.ts'],
     },

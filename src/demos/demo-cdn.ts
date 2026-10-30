@@ -37,6 +37,9 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
   try {
     const miss = await get(edge, v1.path);
     const hit = await get(edge, v1.path);
+    // `curl -I` and browser revalidation: both answered from the cache, no body, no origin trip.
+    const head = await get(edge, v1.path, { method: 'HEAD' });
+    const revalidate = await get(edge, v1.path, { headers: { 'if-none-match': hit.etag ?? '' } });
 
     await get(edge, `/${PLAIN_KEY}`);
     const plainAgain = await get(edge, `/${PLAIN_KEY}`);
@@ -53,6 +56,12 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
       'edge-hit': hit.status,
       'cache-hit': hit.xCache === 'HIT' ? 1 : 0,
       'cache-control-immutable': hit.cacheControl === IMMUTABLE ? 1 : 0,
+      'edge-head': head.status,
+      'head-x-cache-hit': head.xCache === 'HIT' ? 1 : 0,
+      'head-body-bytes': head.body.length,
+      'head-content-length-match': head.contentLength === V1.length ? 1 : 0,
+      revalidate: revalidate.status,
+      'revalidate-body-bytes': revalidate.body.length,
       'no-cache-control-hit': plainAgain.xCache === 'HIT' ? 1 : 0,
       'new-name': v2.key !== v1.key ? 1 : 0,
       'new-url': fresh.status,
@@ -70,12 +79,18 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
         lines['edge-hit'] === 200 &&
         lines['cache-hit'] === 1 &&
         lines['cache-control-immutable'] === 1 &&
+        lines['edge-head'] === 200 &&
+        lines['head-x-cache-hit'] === 1 &&
+        lines['head-body-bytes'] === 0 &&
+        lines['head-content-length-match'] === 1 &&
+        lines.revalidate === 304 &&
+        lines['revalidate-body-bytes'] === 0 &&
         lines['no-cache-control-hit'] === 0 &&
         lines['new-name'] === 1 &&
         lines['new-url'] === 200 &&
         lines['content-changed'] === 1 &&
         lines['old-url-still-hit'] === 1 &&
-        // v1, plain twice (never cached), v2: v1's second and third reads came from the cache.
+        // v1, plain twice (never cached), v2: every other v1 read, HEAD and 304 came from the cache.
         lines['origin-fetches'] === 4,
     };
   } finally {
@@ -84,12 +99,14 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
   }
 }
 
-async function get(base: string, path: string) {
-  const res = await fetch(`${base}${path}`);
+async function get(base: string, path: string, init: RequestInit = {}) {
+  const res = await fetch(`${base}${path}`, init);
   return {
     status: res.status,
     xCache: res.headers.get('x-cache'),
     cacheControl: res.headers.get('cache-control'),
+    etag: res.headers.get('etag'),
+    contentLength: Number(res.headers.get('content-length') ?? -1),
     body: Buffer.from(await res.arrayBuffer()),
   };
 }

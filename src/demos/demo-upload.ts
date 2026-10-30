@@ -188,11 +188,10 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
         lines['key-from-server'] === 1 &&
         lines['intent-idempotent'] === 1 &&
         lines['put-ttl-sec'] === PUT_URL_TTL_SEC &&
-        lines.tampered === 403 &&
-        lines['oversized-put'] === 403 &&
+        is4xx(lines.tampered) &&
+        is4xx(lines['oversized-put']) &&
         lines['orphan-swept'] === 1 &&
-        lines['commit-without-bytes'] >= 400 &&
-        lines['commit-without-bytes'] < 500 &&
+        is4xx(lines['commit-without-bytes']) &&
         lines['api-alive'] === 0 &&
         lines['put-env-keys'] === 0 &&
         lines['put-offline'] === 200 &&
@@ -202,11 +201,16 @@ async function run(): Promise<{ lines: Record<string, number>; ok: boolean }> {
         lines.download === 302 &&
         lines['download-body-match'] === 1 &&
         lines['expiry-probe-fresh'] === 200 &&
-        lines.expired === 403,
+        is4xx(lines.expired),
     };
   } finally {
     await api?.app.close();
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+/** A rejected signature is 403 on S3 and MinIO, 400 on some other stores; both mean "refused". */
+function is4xx(status: number): boolean {
+  return status >= 400 && status < 500;
 }
 main().catch(fail);

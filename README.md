@@ -101,7 +101,9 @@ and a role session (STS) usually lasts an hour.
 
 `expired=403` in the demo uses the same `Storage.presignPut` the API calls,
 with a 2-second TTL. The same URL gives 200 while it is fresh and 403 after,
-so the demo does not wait five minutes.
+so the demo does not wait five minutes. The demo accepts any 4xx there (and
+for `tampered` and `oversized-put`): S3 and MinIO refuse a bad or expired
+signature with 403, some other S3-compatible stores with 400.
 
 ### Multipart: threshold, part size, resume
 
@@ -139,14 +141,20 @@ silently.
 
 ### CDN: which form, and the AWS policy
 
-**Local form.** `src/cdn/edge.ts` is about 40 lines of logic:
+**Local form.** `src/cdn/edge.ts` is about 60 lines of logic:
 - It reads the private bucket with its own credentials, through the same
   SDK client, and keeps an LRU in memory.
+- The LRU is bounded by **bytes**, not entries: 64 MiB of bodies in total
+  (`EDGE_MAX_BYTES`), least recently used evicted first. An object above
+  10 MiB is served but not cached, so one large file cannot flush the rest.
+  A count limit would have allowed 1000 × 10 MiB ≈ 10 GiB.
+- It answers `GET` and `HEAD` (`curl -sSI` gets the headers and
+  `Content-Length` from the cache), and `304` with no body when
+  `If-None-Match` matches the ETag. Other methods are `405`.
 - It answers with `X-Cache: HIT|MISS`.
 - It coalesces concurrent misses into one origin fetch.
 - It serves `assets/` only; user uploads never go through it.
-- It keeps objects of at most 10 MiB in memory, and answers 400 to a
-  malformed path.
+- It answers 400 to a malformed path.
 
 That is the OAC idea: the cache reaches storage, the public reaches the
 cache. The bucket has no policy at all, so an anonymous GET straight at
@@ -255,8 +263,9 @@ resumed-parts=1  complete=200  size-match=1  etag-multipart=1
 
 $ npm run demo:cdn
 direct=403  edge-miss=200  edge-miss-x-cache-miss=1  edge-hit=200  cache-hit=1
-cache-control-immutable=1  no-cache-control-hit=0
-new-name=1  new-url=200  content-changed=1  old-url-still-hit=1
+cache-control-immutable=1  edge-head=200  head-x-cache-hit=1  head-body-bytes=0
+head-content-length-match=1  revalidate=304  revalidate-body-bytes=0
+no-cache-control-hit=0  new-name=1  new-url=200  content-changed=1  old-url-still-hit=1
 invalidations=0  origin-fetches=4
 ```
 
@@ -272,8 +281,10 @@ What the main lines prove:
   Process B uploads only the third. Before Complete, `HeadObject` is 404
   even though two parts are stored.
 - `demo:cdn`: `origin-fetches=4` breaks down as follows. `v1` was fetched
-  once and then served twice from the cache. The object without
-  `Cache-Control` was fetched both times. `v2` was fetched once.
+  once and then served from the cache four times: a GET, a `HEAD`, a
+  conditional GET answered `304`, and the old-URL read after the deploy. The
+  object without `Cache-Control` was fetched both times. `v2` was fetched
+  once.
 
 ---
 

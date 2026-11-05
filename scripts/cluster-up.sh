@@ -22,5 +22,8 @@ fi
 docker image inspect "$PG_IMAGE" >/dev/null 2>&1 || docker pull "$PG_IMAGE"
 
 # A host image does not exist inside the node: without this the pod sits in ErrImagePull.
-kind load docker-image --name "$CLUSTER" "$IMAGE" "$PG_IMAGE"
+# Load one image per call. A single `kind load` of both images is one import:
+# a failure on postgres then leaves the API image out of the node as well.
+kind load docker-image --name "$CLUSTER" "$IMAGE"
+kind load docker-image --name "$CLUSTER" "$PG_IMAGE"
 kubectl --context "$(name context)" get nodes -o wide

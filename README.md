@@ -271,15 +271,19 @@ The path:
    `SKIP_VAULT=1`, `export`).
 2. That runs `scripts/pulumi.sh up`, and the program reads the values from
    `process.env`.
-3. The program creates the Secret `api-secrets`, with `data` in base64 and
-   each value wrapped in `pulumi.secret`. In the state the values are
-   encrypted with the passphrase.
+3. The program creates the Secret `api-secrets`, with `data` in base64.
+   Values are not wrapped in `pulumi.secret`: that stores `data` as one
+   ciphertext, and a new nonce on every encrypt shows up as `~data` on
+   every `up`. The passphrase still encrypts the state file as a whole.
 4. The Deployment and Postgres take the values only through `secretKeyRef`.
    The manifest holds no value.
 
 Details:
-- **`data`, not `stringData`.** `stringData` is write-only, so every `up`
-  would see a diff. With `data`, a second `up` is `10 unchanged`.
+- **`data`, not `stringData`, and no `pulumi.secret()` on each value.**
+  `stringData` is write-only, so every `up` would see a diff. Wrapping
+  each value in `pulumi.secret()` encrypts the whole `data` map as one
+  blob; the ciphertext changes on every encrypt, so every `up` shows
+  `~data`. With plain base64 `data`, a second `up` is `10 unchanged`.
 - **`enableSecretMutable: true` on the provider.** By default a change in a
   Secret's data replaces the Secret, and everything that references it by
   name is replaced too. For the Deployment that means delete + create, not a

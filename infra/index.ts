@@ -43,7 +43,10 @@ const appLabels = { app: names.app };
 const pgLabels = { app: 'postgres' };
 
 // `data` (base64), not `stringData`: stringData is write-only, so every `up`
-// would see a diff. pulumi.secret keeps the values encrypted in the state.
+// would see a diff. Do not wrap each value in pulumi.secret(): that stores
+// `data` as one ciphertext in state, and a new nonce on every encrypt shows
+// up as `~data` even when the values did not change. The passphrase still
+// encrypts the state file as a whole.
 const secret = new k8s.core.v1.Secret(
   'app-secrets',
   {
@@ -52,7 +55,7 @@ const secret = new k8s.core.v1.Secret(
     data: Object.fromEntries(
       Object.entries(secretValues).map(([key, value]) => [
         key,
-        pulumi.secret(Buffer.from(value, 'utf8').toString('base64')),
+        Buffer.from(value, 'utf8').toString('base64'),
       ]),
     ),
   },

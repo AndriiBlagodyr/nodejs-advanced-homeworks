@@ -44,11 +44,11 @@ anyway, so deleting its row loses nothing.
 
 | Змінна | Джерело | Навіщо |
 | --- | --- | --- |
-| `JWT_PRIVATE_KEY` | сховище (#11) | base64 PKCS#8 PEM, signs access tokens |
-| `JWT_PUBLIC_KEY` | сховище (#11) | base64 SPKI PEM of the current `kid` |
-| `JWT_KID` | сховище (#11) | `kid` header; the verifier picks the key by it |
-| `JWT_PUBLIC_KEYS` | сховище (#11) | optional JSON `{"old-kid":"<base64 PEM>"}` kept during overlap |
-| `REFRESH_TOKEN_PEPPER` | сховище (#11) | HMAC pepper for refresh-token hashes |
+| `JWT_PRIVATE_KEY` | vault (#11) | base64 PKCS#8 PEM, signs access tokens |
+| `JWT_PUBLIC_KEY` | vault (#11) | base64 SPKI PEM of the current `kid` |
+| `JWT_KID` | vault (#11) | `kid` header; the verifier picks the key by it |
+| `JWT_PUBLIC_KEYS` | vault (#11) | optional JSON `{"old-kid":"<base64 PEM>"}` kept during overlap |
+| `REFRESH_TOKEN_PEPPER` | vault (#11) | HMAC pepper for refresh-token hashes |
 | `DATABASE_URL` | compose / оточення | dev credentials, not a secret |
 | `REDIS_URL` | compose / оточення | cache (`allkeys-lru`) |
 | `REDIS_QUEUE_URL` | compose / оточення | queue, sessions, rate limits (`noeviction`) |

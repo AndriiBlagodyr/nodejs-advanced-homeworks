@@ -1,11 +1,319 @@
+# HW-28 — Kubernetes: a rolling update under load, measured
+
+The course API (the same Nest app as HW-22…26) runs on a local one-node kind
+cluster, next to its own Postgres. The question is no longer "does the image
+start" but "does it survive an update under load". The answer is a number
+from a file of response codes: `failed=0` on about 11 000 requests during a
+rollout, run after run.
+
+Previous snapshots: `hw-03/` … `hw-16/`, `hw-18/`, `hw-19/`, `hw-22/`, `hw-23/`, `hw-24/`, `hw-26/`.
+
+## Kubernetes
+
+**Cluster: kind v0.33.0 (Kubernetes v1.37.0, one node), on Docker Desktop
+with 7.65 GiB of memory and 10 CPUs allocated.** The node container uses about
+1.65 GiB with the whole stack running (control plane, 3 API pods, Postgres).
+kind is the smaller option on a small Docker VM, and minikube refuses to start
+below 1800 MB; here memory was not the limit, kind was the choice.
+
+### Pieces
+
+| Piece | Where |
+| --- | --- |
+| production image: 4 stages, distroless `nonroot`, BuildKit secret | `docker/Dockerfile`, `npm run image:build` |
+| container entrypoint: warm-up, readiness, SIGTERM drain | `src/k8s/serve-main.ts`, `src/k8s/lifecycle.ts` |
+| cluster config (one node, NodePort 30080 → host 28080) | `k8s/kind-config.yaml`, `npm run cluster:up` / `cluster:down` |
+| Pulumi program (TypeScript): Namespace, Secret, Postgres, Deployment, Service, PDB, HPA | `infra/`, `npm run up` / `destroy` |
+| shared names (context, namespace, image, ports) | `k8s/names.json` |
+| vault wrapper, load generator, scan gate | `scripts/with-secrets.sh`, `scripts/load.mjs`, `scripts/scan.mjs` |
+| demos | `demo/image.mjs`, `demo/rollout.mjs`, `demo/pdb.mjs` |
+| CI step with the working scan threshold | `.github/workflows/image-scan.yml` |
+
+### Variables
+
+| Змінна | Джерело | Навіщо |
+| --- | --- | --- |
+| `APP_DB_PASSWORD` | сховище (#11) | Postgres password; goes into the K8s Secret as `DB_PASSWORD`, used by Postgres and the API |
+| `JWT_PRIVATE_KEY` | сховище (#11) | base64 PKCS#8 PEM, signs access tokens (HW-24); K8s Secret |
+| `JWT_PUBLIC_KEY` | сховище (#11) | base64 SPKI PEM of the current key; K8s Secret |
+| `JWT_KID` | сховище (#11) | key id of the signing key; K8s Secret |
+| `REFRESH_TOKEN_PEPPER` | сховище (#11) | HMAC pepper for refresh-token hashes; K8s Secret |
+| `PULUMI_CONFIG_PASSPHRASE` | сховище (#11) | encrypts the secrets in the Pulumi state |
+| `PULUMI_BACKEND_URL` | environment | local file backend, `file://$PWD/.pulumi`; never `pulumi login` |
+| `SKIP_VAULT` | environment | `1` for the grader: values come from `export` |
+| `.npm_token` (file) | local file, not in git | registry token for `npm ci`, BuildKit secret at build time only |
+
+The Pulumi program checks the vault values first, before it creates a
+provider. Without one, `pulumi preview` exits non-zero with
+`missing required secret: <NAME>`. Without the passphrase, Pulumi itself
+stops and names `PULUMI_CONFIG_PASSPHRASE`. No defaults anywhere. The vault
+names from HW-24/HW-26 that this stack does not use (`STORAGE_*`,
+`JWT_PUBLIC_KEYS`) are marked `vault (#11)` in their old tables.
+
+### Image
+
+`docker/Dockerfile` has four stages:
+- `deps` runs `npm ci` with the token;
+- `build` runs `tsc` (`tsconfig.build.json`, `src` only);
+- `prod-deps` runs `npm ci --omit=dev` with the token;
+- the final stage is `gcr.io/distroless/nodejs22-debian12:nonroot`, with only
+  `node_modules` and `dist/src`, `USER 65532:65532`.
+
+There is no `sh` in the final image, so after an RCE the attacker has no
+shell to run. That is the reason for distroless here, not the size (264 MB,
+mostly `node_modules`).
+
+**Build secret.** The project has no private registry. `docker/npmrc` points
+a private scope (`@hw28-private`) at a registry with
+`_authToken=${NPM_TOKEN}`. The value is a BuildKit secret: `RUN
+--mount=type=secret,id=npm_token,required=true`, read into `NPM_TOKEN` for
+that one `npm ci`. `.npm_token` is in `.gitignore` and `.dockerignore`. Not an
+ARG: an ARG lands in the image history. Not COPY + rm: the bytes stay in the
+COPY layer under a whiteout.
+
+`demo:image` reads every number from Docker:
+- `stages`: `FROM` lines in `docker/Dockerfile`;
+- `shell-inside`: `docker run --entrypoint` with `sh`, `/bin/sh`,
+  `/bin/bash`, `/busybox/sh`;
+- `runtime-uid`: `process.getuid()` run by the image's own entrypoint;
+- the token: searched in `docker history --no-trunc`, in
+  `docker image inspect`, and in every layer of `docker save`, decompressed.
+
+`DEMO_IMAGE_CONTROL=1` also builds the two wrong variants
+(`docker/control/`) and measures them with the same code. That shows each
+channel sees its kind of leak:
+
+```text
+$ DEMO_IMAGE_CONTROL=1 npm run demo:image
+stages=4  shell-inside=0  runtime-uid=65532
+token-in-history=0  token-in-config=0  token-in-layers=0
+control-arg-token-in-history=2   control-arg-token-in-config=0   control-arg-token-in-layers=0
+control-copy-token-in-history=0  control-copy-token-in-config=0  control-copy-token-in-layers=1
+```
+
+The ARG shows up only in history, and COPY + rm only in the layers. With
+Docker's containerd image store, `image inspect` carries no history, so that
+channel stays 0 even for the ARG.
+
+### Scan gate
+
+`npm run scan` saves the image and scans the tarball with Trivy, pinned to
+`aquasec/trivy:0.76.1` and run as a container, so nothing needs installing.
+It then counts the findings from the JSON report itself: severity
+`CRITICAL,HIGH`, only those with a fixed version, one per
+CVE + package + version. The verdict is `found <= SCAN_MAX`. `SCAN_MAX` has
+no default.
+
+```text
+$ SCAN_MAX=-1 npm run scan       → critical=1 high=6 found=7 max-allowed=-1 gate=fail, exit 1
+$ SCAN_MAX=99999 npm run scan    → found=7 max-allowed=99999 gate=pass, exit 0
+```
+
+All 7 come from `libssl3` in the distroless base, which we cannot fix until
+Google rebuilds the base image. The first scan also found 7 in our npm tree
+(`body-parser`, `brace-expansion`, `multer`). They are fixed:
+- the lockfile now has fixed versions within the existing ranges;
+- Nest is at 11.2.8;
+- `overrides: { multer: ^2.5.0 }`, because Nest 11 still pins 2.4.0.
+
+**Working threshold: CI runs `SCAN_MAX=10`** (`image-scan.yml`, which also
+keeps the report as an artifact). That leaves room for the base image's
+current findings and the daily DB updates. A new batch of fixable findings in
+our own dependencies fails the build.
+
+### Probes and shutdown
+
+The app answers the two questions on two paths:
+- **`/healthz` (liveness):** "should I be killed?" It is 200 as long as the
+  event loop answers.
+- **`/readyz` (readiness):** "may I get traffic?" It is 200 only after the
+  warm-up and before SIGTERM.
+
+A liveness probe on `/readyz` would turn "warming up" or "draining" into an
+endless restart loop.
+
+| Probe | Path | Settings |
+| --- | --- | --- |
+| startupProbe | `/healthz` | period 1 s × 60: 60 s to warm up; liveness and readiness wait for it |
+| readinessProbe | `/readyz` | period 1 s, failureThreshold 1 |
+| livenessProbe | `/healthz` | period 10 s × 3 |
+
+**Warm-up.** Before `listen()` the entrypoint applies migrations, with a
+Postgres advisory lock so only one pod migrates at a time. It boots Nest and
+holds until at least `WARMUP_MS=4000` since start. The log shows
+`ready … warmupMs=4008`. Without that gap, the broken profile would show zero
+failures only because the app starts faster than it can break.
+
+**SIGTERM, in this order:**
+1. `/readyz` turns 503. From then on every response carries
+   `Connection: close`, so a kept-alive client leaves the pod.
+2. It keeps serving for `DRAIN_MS=5000`, while the endpoint disappears from
+   kube-proxy.
+3. Then `app.close()` stops accepting connections and finishes the in-flight
+   requests. After `CLOSE_TIMEOUT_MS=10000` any socket still open is cut.
+4. Exit 0.
+
+`terminationGracePeriodSeconds: 30` is above drain + close (15 s), so SIGKILL
+never lands mid-drain. The program refuses a grace period that is not.
+Calling `close()` first would refuse new connections while the load balancer
+still sends them.
+
+**Rollout:** `maxSurge: 1`, `maxUnavailable: 0`. An old pod goes only after a
+new one says it is ready. A rollout is triggered by changing the pod
+template: `demo:rollout` runs `pulumi up -c rev=<ms>`, and `REV` is an env
+var of the container.
+
+**Bonus, startupProbe on numbers (from the probe settings).** Without a
+startupProbe and with `initialDelaySeconds: 0`, liveness fails while the app
+is not listening yet. The third failure comes about 20–30 s after start
+(period 10 s × 3), and the pod restarts. A 40 s warm-up would then restart
+forever. With the startupProbe, the app has 60 s (1 s × 60), and after it
+passes, liveness is back to "is it alive". Raising `initialDelaySeconds`
+instead would also delay detecting a real hang after every restart.
+
+### demo:rollout: the measurement
+
+The load generator `scripts/load.mjs` runs as a separate process:
+- **Pace:** 16 workers, 300 rps in total, `GET /products?limit=5` (a real
+  Postgres query) through the NodePort.
+- **The file:** one response code per line. `000` means no HTTP response at
+  all, the same convention as curl. There are no retries.
+- **Connections:** each worker reuses its connection for 10 requests, then
+  opens a new one. The Service keeps re-balancing, so a pod that is not
+  listening yet gets its share, and kept-alive sockets are exercised too.
+- **The count:** the demo reads the file: `requests` = lines, `ok` = `200`,
+  `failed` = everything else. Then it deletes the file.
+
+The measured window:
+- the load starts once the Deployment is settled, with no terminating pods
+  and 5 s of quiet;
+- a 3 s baseline runs, then `pulumi up` with a new `rev`;
+- the load continues until the last old pod is gone, plus 8 s.
+
+`rollout-seconds` is the time from the new generation appearing to all
+replicas updated and available, with no old ones left.
+
+```text
+$ npm run demo:rollout                    # hardened (graded)
+profile=1  requests=11195  ok=11195  failed=0  no-response=0  http-5xx=0  rollout-seconds=16.1
+$ DEMO_PROFILE=broken npm run demo:rollout  # control: no probes, maxUnavailable 1, no drain
+profile=0  requests=4906   ok=3507   failed=1399  no-response=1399  http-5xx=0  rollout-seconds=1
+```
+
+- **Hardened is zero every time.** Four runs in a row, each right after a
+  broken one: 11 195, 10 735, 10 734 and 10 946 requests, `failed=0` each
+  time.
+- **Broken always fails, and the share floats** (45 of 1 994, 38 of 2 013,
+  1 399 of 4 906). Its connections die and hang until the 10 s timeout,
+  which also cuts the request count. All failures are `000`, not 5xx: with a
+  NodePort, a missing pod is a refused or dropped connection. Behind an
+  Ingress the same would be 502/503.
+- **Broken looks 16 times faster, and that is not a win.** Without readiness,
+  a pod counts as available the moment its container starts, 4 s before it
+  listens. Hardened pays for zero: no old pod leaves before a new one is
+  ready, plus the drain on every pod.
+- `DEMO_PROFILE=broken` restores the hardened profile when it ends.
+
+Two lessons from getting there:
+- **The client runs out of ports first.** One new connection per request at
+  full speed left 16 000 sockets in `TIME_WAIT` on the Mac, and Docker
+  Desktop's port forwarding started resetting connections with no rollout
+  at all. Hence the pacing and the 10 requests per connection.
+- **A run measures its predecessor without a settle step.** Pods that exit
+  without a drain stay in kube-proxy's rules for a moment after their object
+  is gone, and new connections to their IP hang. The broken profile's
+  teardown showed up as 7 timeouts in the next run's baseline, until the demo
+  waited for quiet first.
+
+### PDB
+
+`minAvailable: 2` with 3 replicas leaves one voluntary disruption, so a node
+drain can proceed one pod at a time. `minAvailable == replicas` would mean
+`disruptionsAllowed: 0` and block every drain. A PDB over one replica
+protects nothing; the program refuses fewer than 2 replicas.
+
+```text
+$ npm run demo:pdb
+healthy=3  minAvailable=2  disruptions-allowed-before=1  evict-1=201  evict-2=429  recovered=1
+```
+
+The evictions are `POST …/pods/<name>/eviction` through `kubectl proxy`, so
+the codes are the API server's HTTP status. The second eviction comes before
+the replacement is ready, and the budget is spent. The demo then waits until
+the Deployment is whole and `disruptionsAllowed` is back to 1. A plain
+`kubectl delete pod` would not be stopped at all: the budget applies only to
+the Eviction API.
+
+### HPA and `replicas`: who owns the field
+
+The HPA is `autoscaling/v2`: min 2, max 6, CPU 70 % of the 100m request. kind
+has no metrics-server, so it shows `cpu: <unknown>/70%` and scales nothing.
+That is why `spec.replicas: 3` stays in the program.
+
+In a cluster with metrics-server this becomes a field-ownership conflict.
+The Pulumi program (server-side apply, field manager `pulumi-kubernetes`)
+owns `spec.replicas` and writes 3 on every `up`. The HPA controller writes
+the same field through the scale subresource. Say the HPA scaled to 6 under
+load. The next deploy resets it to 3, the HPA scales back up a minute later,
+and capacity drops in the middle of the load. With strict SSA conflict
+detection, the apply fails instead.
+
+The production fix is one owner:
+- drop `replicas` from the program once an HPA exists, letting
+  `minReplicas` set the floor;
+- or keep it only for the first create, with
+  `ignoreChanges: ["spec.replicas"]`.
+
+### Secrets: vault → Pulumi → K8s Secret → pod
+
+The path:
+1. `npm run up` runs `scripts/with-secrets.sh dev` (Infisical; with
+   `SKIP_VAULT=1`, `export`).
+2. That runs `scripts/pulumi.sh up`, and the program reads the values from
+   `process.env`.
+3. The program creates the Secret `api-secrets`, with `data` in base64.
+   Values are not wrapped in `pulumi.secret`: that stores `data` as one
+   ciphertext, and a new nonce on every encrypt shows up as `~data` on
+   every `up`. The passphrase still encrypts the state file as a whole.
+4. The Deployment and Postgres take the values only through `secretKeyRef`.
+   The manifest holds no value.
+
+Details:
+- **`data`, not `stringData`, and no `pulumi.secret()` on each value.**
+  `stringData` is write-only, so every `up` would see a diff. Wrapping
+  each value in `pulumi.secret()` encrypts the whole `data` map as one
+  blob; the ciphertext changes on every encrypt, so every `up` shows
+  `~data`. With plain base64 `data`, a second `up` is `10 unchanged`.
+- **`enableSecretMutable: true` on the provider.** By default a change in a
+  Secret's data replaces the Secret, and everything that references it by
+  name is replaced too. For the Deployment that means delete + create, not a
+  rollout. A rotation now updates the Secret in place. Pods read env at
+  start, so a rotated value reaches them with the next `rev`.
+- **No `pulumi refresh` on this stack.** It drops the Secret from the state,
+  and the next `up` fails with `already exists`.
+- **base64 is not encryption.** In this kind cluster the value sits in etcd
+  in plain text, because no `EncryptionConfiguration` is set up. "Put it in a
+  Secret" means "took it out of git", not "encrypted it".
+- **The two secrets do different jobs, and neither replaces the other.** The
+  BuildKit secret lives during `docker build`, and it keeps the image (and
+  the registry) clean. The K8s Secret lives at runtime, and it keeps the
+  repository clean.
+
+**Production paths, not installed here.** External Secrets Operator syncs a
+vault entry (Infisical, AWS Secrets Manager, Vault) into a K8s Secret, so
+the value never passes through the deploy program or its state. The Secrets
+Store CSI driver goes further: it mounts the value as a file straight from
+the vault, and optionally syncs a Secret. With either one, rotation becomes
+the vault's job.
+
+---
+
 # HW-26 — Files: presigned uploads, multipart resume, CDN without invalidation
 
 Files (product photos, avatars, HW-15 dumps) no longer touch a server disk.
 The API decides who may upload what and under which key. The bytes go from
 the client straight into S3-compatible storage. Public assets are served by
 a cache in front of a private bucket.
-
-Previous snapshots: `hw-03/` … `hw-16/`, `hw-18/`, `hw-19/`, `hw-22/`, `hw-23/`, `hw-24/`.
 
 ## Files
 
@@ -30,8 +338,8 @@ a clean slate. The `1g` size keeps a demo series from running out of space.
 
 | Змінна | Джерело | Навіщо |
 | --- | --- | --- |
-| `STORAGE_ACCESS_KEY` | сховище (#11) | storage access key: read and write every file in the bucket |
-| `STORAGE_SECRET_KEY` | сховище (#11) | its secret |
+| `STORAGE_ACCESS_KEY` | vault (#11) | storage access key: read and write every file in the bucket |
+| `STORAGE_SECRET_KEY` | vault (#11) | its secret |
 | `STORAGE_ENDPOINT` | compose / оточення | `http://127.0.0.1:22650` for MinIO; empty means AWS S3 |
 | `STORAGE_REGION` | compose / оточення | `us-east-1` unless set |
 | `STORAGE_BUCKET` | compose / оточення | `hw26-files`; not a secret |
@@ -334,11 +642,11 @@ anyway, so deleting its row loses nothing.
 
 | Змінна | Джерело | Навіщо |
 | --- | --- | --- |
-| `JWT_PRIVATE_KEY` | сховище (#11) | base64 PKCS#8 PEM, signs access tokens |
-| `JWT_PUBLIC_KEY` | сховище (#11) | base64 SPKI PEM of the current `kid` |
-| `JWT_KID` | сховище (#11) | `kid` header; the verifier picks the key by it |
-| `JWT_PUBLIC_KEYS` | сховище (#11) | optional JSON `{"old-kid":"<base64 PEM>"}` kept during overlap |
-| `REFRESH_TOKEN_PEPPER` | сховище (#11) | HMAC pepper for refresh-token hashes |
+| `JWT_PRIVATE_KEY` | vault (#11) | base64 PKCS#8 PEM, signs access tokens |
+| `JWT_PUBLIC_KEY` | vault (#11) | base64 SPKI PEM of the current `kid` |
+| `JWT_KID` | vault (#11) | `kid` header; the verifier picks the key by it |
+| `JWT_PUBLIC_KEYS` | vault (#11) | optional JSON `{"old-kid":"<base64 PEM>"}` kept during overlap |
+| `REFRESH_TOKEN_PEPPER` | vault (#11) | HMAC pepper for refresh-token hashes |
 | `DATABASE_URL` | compose / оточення | dev credentials, not a secret |
 | `REDIS_URL` | compose / оточення | cache (`allkeys-lru`) |
 | `REDIS_QUEUE_URL` | compose / оточення | queue, sessions, rate limits (`noeviction`) |
@@ -823,26 +1131,18 @@ no matter how careful the relay is.
 
 ## Grading
 
-The storage is the local MinIO from `docker-compose.yml` (port `22650`). Its
-dev credentials are already in the compose file and are not a secret. No AWS
-account is needed. Uploads run under the HW-24 guards, so the block also
-makes a one-time ES256 key pair and pepper. The real signing key stays in the
-vault. This pair lives only in a temp dir that is deleted right after it is
-exported. The DB password is read from the local `db` container, so no
-connection string with a password is written down here.
+No cloud account. Everything graded runs on a local kind cluster. The
+grader has no vault, so the block uses `SKIP_VAULT=1` and one-time values:
+a random database password, a random Pulumi passphrase, a one-time ES256
+pair. The pair lives only in a temp dir that is deleted right after it is
+exported. Pulumi's state is a local file (`file://$PWD/.pulumi`); there is
+no `pulumi login`. `.npm_token` is a decoy for the BuildKit secret; it is
+not in git.
 
 ```bash
-docker compose up -d --wait
-export STORAGE_ENDPOINT=http://127.0.0.1:22650
-export STORAGE_REGION=us-east-1
-export STORAGE_ACCESS_KEY=hw26user
-export STORAGE_SECRET_KEY=hw26secretpass
-export STORAGE_BUCKET=hw26-files
-export DATABASE_URL="postgres://app:$(docker compose exec -T db printenv POSTGRES_PASSWORD)@127.0.0.1:5432/marketplace"
-export BROKER_URL=amqp://app:app@127.0.0.1:5672
-export REDIS_URL=redis://127.0.0.1:6390
-export REDIS_QUEUE_URL=redis://127.0.0.1:6391
 export SKIP_VAULT=1
+export APP_DB_PASSWORD=grader-secret
+export JWT_KID=grader
 KEYS="$(mktemp -d)"
 node -e 'const {generateKeyPairSync}=require("node:crypto");
 const k=generateKeyPairSync("ec",{namedCurve:"P-256",
@@ -851,26 +1151,31 @@ const k=generateKeyPairSync("ec",{namedCurve:"P-256",
 const fs=require("node:fs"), dir=process.argv[1];
 fs.writeFileSync(dir+"/priv.b64",Buffer.from(k.privateKey).toString("base64"),{mode:0o600});
 fs.writeFileSync(dir+"/pub.b64",Buffer.from(k.publicKey).toString("base64"));' "$KEYS"
-export JWT_KID=grader
 export JWT_PRIVATE_KEY="$(cat "$KEYS/priv.b64")"
 export JWT_PUBLIC_KEY="$(cat "$KEYS/pub.b64")"
-export REFRESH_TOKEN_PEPPER="$(openssl rand -hex 32)"
 rm -rf "$KEYS"
-npm ci
-npm run demo:upload
-npm run demo:multipart
-npm run demo:multipart
-npm run demo:cdn
+export REFRESH_TOKEN_PEPPER="$(openssl rand -hex 32)"
+export PULUMI_CONFIG_PASSPHRASE=hw28-grading
+export PULUMI_BACKEND_URL="file://$PWD/.pulumi"
+npm --prefix infra ci
+printf 'dummy-npm-token' > .npm_token
+npm run image:build
+npm run cluster:up
+npm run up
+npm run demo:image
+npm run demo:rollout
+npm run demo:pdb
+SCAN_MAX=-1 npm run scan; echo "exit(max=-1)=$?"
+SCAN_MAX=99999 npm run scan; echo "exit(max=99999)=$?"
 ```
 
-Each demo compiles first (`predemo:*` runs `tsc`), applies pending migrations
-and creates the bucket if it is missing. It leaves the bucket private, with no
-bucket policy. The HW-24 demos (`demo:auth`, `demo:reuse`, `demo:rbac`) run
-under the same exports. `5432` is PgBouncer in front of Postgres. `5672` is AMQP.
-`6390` is the cache Redis and `6391` the queue Redis, still used by the HW-23
-demos (`demo:cache`, `demo:session`, `demo:ratelimit`, `demo:queue`) and the
-HW-22 ones (`demo:outbox`, `demo:crash-write`, `demo:crash-relay`). None of
-the ports are in 22300–22399. `22650` is the S3 API of the `storage` service
-and `22651` its console. `npm run start` without the auth or storage secrets
-exits non-zero and names every missing variable; it does not open the
-database first.
+Tear down after the check: `npm run destroy && npm run cluster:down`. The
+image is loaded into the node with `kind load docker-image` (inside
+`cluster:up`); without that the pod sits in `ErrImagePull`. Rebuilds of the
+image need another `cluster:up` (it is a no-op on an existing cluster and
+reloads the image). A second `npm run up` on the same stack is `10
+unchanged`. `npm run start` without the auth or storage secrets still exits
+non-zero and names every missing variable; it does not open the database
+first. The HW-26 demos (`demo:upload`, `demo:multipart`, `demo:cdn`) and the
+HW-24 ones (`demo:auth`, `demo:reuse`, `demo:rbac`) still run under the
+compose stack from `docker-compose.yml`.

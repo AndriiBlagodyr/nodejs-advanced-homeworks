@@ -13,3 +13,7 @@ dist/
 coverage/
 *.tsbuildinfo
 backups/
+.npm_token
+.pulumi/
+infra/Pulumi.*.yaml
+infra/bin/

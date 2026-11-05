@@ -50,11 +50,24 @@
     "demo:workers": "bash scripts/with-secrets.sh dev node dist/src/demo-workers.js",
     "demo:retry": "bash scripts/with-secrets.sh dev node dist/src/demo-retry.js",
     "report": "bash scripts/with-secrets.sh dev node dist/src/report.js",
+    "image:build": "bash scripts/image-build.sh",
+    "cluster:up": "bash scripts/cluster-up.sh",
+    "cluster:down": "kind delete cluster --name hw28",
+    "scan": "node scripts/scan.mjs",
+    "up": "bash scripts/with-secrets.sh dev bash scripts/pulumi.sh up --yes --non-interactive",
+    "preview": "bash scripts/with-secrets.sh dev bash scripts/pulumi.sh preview --non-interactive",
+    "destroy": "bash scripts/with-secrets.sh dev bash scripts/pulumi.sh destroy --yes --non-interactive",
+    "demo:image": "node demo/image.mjs",
+    "demo:rollout": "bash scripts/with-secrets.sh dev node demo/rollout.mjs",
+    "demo:pdb": "node demo/pdb.mjs",
     "test:unit": "jest --selectProjects unit",
     "test:integration": "jest --selectProjects integration",
     "test:e2e": "jest --selectProjects e2e",
     "test:contract": "jest --selectProjects contract",
     "verify:provider": "ts-node test/contract/provider.verify.ts"
+  },
+  "overrides": {
+    "multer": "^2.5.0"
   },
   "engines": {
     "node": ">=22"

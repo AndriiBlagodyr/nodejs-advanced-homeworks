@@ -1,8 +1,11 @@
 import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common';
 import { Roles } from '../auth/auth.decorators';
 import { AuthGuard, RolesGuard } from '../auth/auth.guard';
+import { childLogger } from '../observability/logger';
 import { CreateProductDto } from './create-product.dto';
 import { ProductsService } from './products.service';
+
+const log = childLogger('products.controller');
 
 @Controller('products')
 export class ProductsController {
@@ -27,6 +30,7 @@ export class ProductsController {
 
   @Get(':productId')
   getProduct(@Param('productId', ParseIntPipe) id: number) {
+    log.info({ productId: id }, 'get product');
     return this.products.findOne(id);
   }
 }

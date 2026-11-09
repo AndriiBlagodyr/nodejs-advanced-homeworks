@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
+import { patchContext } from '../observability/context';
 import { AuthService } from './auth.service';
 import type { AccessClaims, Role } from './tokens';
 
@@ -27,6 +28,7 @@ export class AuthGuard implements CanActivate {
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const req = ctx.switchToHttp().getRequest<AuthedRequest>();
     req.user = await this.auth.authenticate(bearerToken(req.headers.authorization));
+    patchContext({ userId: req.user.sub });
     return true;
   }
 }

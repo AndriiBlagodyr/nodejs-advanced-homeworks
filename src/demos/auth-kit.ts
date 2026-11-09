@@ -86,7 +86,7 @@ export async function dbQuery<T = unknown>(sql: string, params: unknown[] = []):
 export type Running = { app: INestApplication; base: string };
 
 export async function bootApi(): Promise<Running> {
-  const app = await NestFactory.create(AppModule, { logger: ['error'] });
+  const app = await NestFactory.create(AppModule, { logger: false });
   configureApp(app);
   await app.listen(0, '127.0.0.1');
   const { port } = app.getHttpServer().address() as AddressInfo;

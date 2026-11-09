@@ -36,4 +36,4 @@ COPY --from=build /app/dist/src ./dist/src
 # Numeric: kubelet cannot resolve the name `nonroot` for runAsNonRoot.
 USER 65532:65532
 EXPOSE 3000
-CMD ["dist/src/k8s/serve-main.js"]
+CMD ["--require", "./dist/src/observability/instrumentation.js", "dist/src/k8s/serve-main.js"]

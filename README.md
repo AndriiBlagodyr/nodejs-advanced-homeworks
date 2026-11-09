@@ -1,3 +1,133 @@
+# HW-29 — Observability: one key from the log to the span
+
+The question is no longer "does the service survive a rollout" (HW-28) but
+"at 03:15 one request returned 500 — how long until you can say what
+happened". The answer is a minute, not an evening: a JSON line, a RED
+dashboard, and a trace whose `trace_id` is the same in the log, the span
+and the incoming `traceparent`.
+
+Previous snapshots: `hw-03/` … `hw-16/`, `hw-18/`, `hw-19/`, `hw-22/`, `hw-23/`, `hw-24/`, `hw-26/`, `hw-28/`.
+
+## Observability
+
+**Stand: three containers next to the existing compose stack** (Jaeger
+all-in-one, Prometheus, Grafana). `grafana/otel-lgtm` starts faster (about
+9 s vs 26 s) but sits at 240 MiB idle and up to 614 MiB under load; four
+separate containers were 165 MiB on the lecture. With the HW-28 kind node
+already around 1.65 GiB, the cheaper stand is the one that still fits.
+Ports are in `22900–22999`. `docker stats --no-stream` after
+`docker compose up -d --wait` is written under **Demos**.
+
+### Pieces
+
+| Piece | Where |
+| --- | --- |
+| pino JSON logger, mixin reads the active span | `src/observability/logger.ts` |
+| ALS (`userId`, `tenant`, `idempotencyKey`) | `src/observability/context.ts` |
+| RED counter + histogram, route template | `src/observability/metrics.ts` |
+| OTel SDK (`--require` before Nest) | `src/observability/instrumentation.ts` |
+| compose stand, Grafana datasource, dashboard JSON | `observability/` |
+| demos | `src/demos/demo-logs.ts`, `demo-metrics.ts`, `demo-trace.ts` |
+
+### Variables
+
+| Змінна | Джерело | Навіщо |
+| --- | --- | --- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | сховище (#11) | OTLP HTTP base (`http://127.0.0.1:22918`); the SDK appends `/v1/traces` |
+| `PROMETHEUS_URL` | сховище (#11) | Prometheus, `http://127.0.0.1:22901` |
+| `TRACE_API_URL` | сховище (#11) | Jaeger query API, `http://127.0.0.1:22904` |
+| `GRAFANA_USER` | сховище (#11) | Grafana admin user |
+| `GRAFANA_PASSWORD` | сховище (#11) | Grafana admin password |
+| `JWT_PRIVATE_KEY` | сховище (#11) | demos boot the real API (HW-24) |
+| `JWT_PUBLIC_KEY` | сховище (#11) | verifier of the current kid |
+| `JWT_KID` | сховище (#11) | signing key id |
+| `REFRESH_TOKEN_PEPPER` | сховище (#11) | refresh-token hashes |
+| `DATABASE_URL` | compose / оточення | PgBouncer in front of Postgres |
+| `SKIP_VAULT` | environment | `1` for the grader: values come from `export` |
+
+The addresses and Grafana credentials come through `scripts/with-secrets.sh`
+(the same wrapper as #11). No new env-file. The demos fail naming a missing
+OTel/Prometheus/Jaeger URL. `npm run start` still only names the auth and
+storage secrets: a missing collector must not hide a missing signing key.
+
+### Logs: correlator from the span, not from a uuid
+
+Every line is JSON. The mixin does
+`trace.getActiveSpan()?.spanContext().traceId` — a homemade uuid would make
+`trace-id-matches-header=0` and `trace-matches-log=0`. No function takes
+`req` to log; tenant and `Idempotency-Key` live in `AsyncLocalStorage`,
+`userId` is patched in the HW-24 guard. `logger.child({ layer })` names the
+component. `GET /products/:productId` goes through controller, service and
+repository with the same `trace_id`.
+
+Redact lists paths. It does not guess: a nested field that is not in the
+list stays in the line. The listed ones are `req.headers.authorization`,
+`req.body.password` and `req.body.refresh_token`. `/auth/*` bodies are not
+logged at all (HW-24 login and refresh). `demo:logs` sends
+`Authorization: Bearer <marker>` and a password with a second marker; the
+request line is there, the markers are not.
+
+### Metrics: RED, template route, buckets that cover the range
+
+- Counter `http_requests_total{method,route,status}` and histogram
+  `http_request_duration_seconds` with the same labels.
+- `route` is the template (`/products/:productId`), from `req.baseUrl` +
+  `req.route.path`. A hundred different ids do not add a series.
+- Buckets: `5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s`. The slow
+  demo request sleeps 800 ms. The top finite `le` is 2 s, so
+  `histogram_quantile` cannot sit on the last bucket while everything is
+  actually worse. `above-top-bucket` is `_count` minus `_bucket{le="2"}`
+  for `/demo/fail`.
+
+### Traces: one key, two doors
+
+Incoming `traceparent` (`00-<32 hex>-<16 hex>-01`) is the active span.
+`GET /demo/fail` returns 500 on purpose: OTel leaves 4xx Unset, so only 5xx
+sets ERROR. The handler opens a nested span around `SELECT 1` and marks it
+ERROR too. `POST /demo/flush` calls `forceFlush()` so the collector has the
+spans before the demo asks Jaeger. `trace_id` in the log line equals the
+span and the header.
+
+### Dashboard (three RED questions)
+
+JSON: `observability/grafana/dashboards/red.json`. Datasource provisioned
+in `observability/grafana/provisioning/datasources/prometheus.yml`.
+
+| Panel | Question | PromQL |
+| --- | --- | --- |
+| Rate | How busy is it? | `sum(rate(http_requests_total[1m]))` |
+| Errors | How much of that is 5xx? | `sum(rate(http_requests_total{status=~"5.."}[1m]))` |
+| Duration | How long do the slow ones take? | `histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[1m])) by (le))` |
+
+Windows are `[1m]` so a minute-long demo moves the line.
+
+**SLO.** The SLI is the share of `http_requests_total` whose `status` is not
+`5xx`, measured by the Errors panel. The SLO is 99.5% of requests over 30
+days. The error budget is `0.005 × 30 × 24 × 60 = 216` minutes per month:
+that is how long the API may serve 5xx before the budget is spent.
+
+### Demos, from my runs
+
+Each demo migrates, boots the API on port 0, drains captured pino lines
+(or `/metrics`) at the start, and exits non-zero if the invariant fails.
+
+```text
+$ npm run demo:logs
+non-json-lines=0  layers=3  distinct-trace-ids=1  trace-id-matches-header=1
+burst=8  burst-trace-ids=8  burst-uneven=0  secret-req-logged=1  secret-in-logs=0
+
+$ npm run demo:metrics
+sent-ok=40  sent-fail=16  counter-delta=56  errors-delta=16
+above-top-bucket=0  series-before=1  series-after=1
+
+$ npm run demo:trace
+spans=2  orphan-spans=0  trace-matches-header=1  trace-matches-log=1  span-status-error=1
+```
+
+`docker stats --no-stream` after compose is up (API not in the stand):
+Jaeger 15 MiB, Prometheus 20 MiB, Grafana 79 MiB — about 114 MiB together,
+next to the existing Postgres / Redis / Rabbit / MinIO services.
+
 # HW-28 — Kubernetes: a rolling update under load, measured
 
 The course API (the same Nest app as HW-22…26) runs on a local one-node kind
@@ -5,8 +135,6 @@ cluster, next to its own Postgres. The question is no longer "does the image
 start" but "does it survive an update under load". The answer is a number
 from a file of response codes: `failed=0` on about 11 000 requests during a
 rollout, run after run.
-
-Previous snapshots: `hw-03/` … `hw-16/`, `hw-18/`, `hw-19/`, `hw-22/`, `hw-23/`, `hw-24/`, `hw-26/`.
 
 ## Kubernetes
 
@@ -1131,17 +1259,28 @@ no matter how careful the relay is.
 
 ## Grading
 
-No cloud account. Everything graded runs on a local kind cluster. The
-grader has no vault, so the block uses `SKIP_VAULT=1` and one-time values:
-a random database password, a random Pulumi passphrase, a one-time ES256
-pair. The pair lives only in a temp dir that is deleted right after it is
-exported. Pulumi's state is a local file (`file://$PWD/.pulumi`); there is
-no `pulumi login`. `.npm_token` is a decoy for the BuildKit secret; it is
-not in git.
+No cloud account. The observability stand is the Jaeger / Prometheus /
+Grafana services in `docker-compose.yml` (ports `22900–22999`). The grader
+has no vault, so the block uses `SKIP_VAULT=1` and one-time values: a
+one-time ES256 pair and pepper (the API still boots under the HW-24
+guards). The pair lives only in a temp dir that is deleted right after it
+is exported. The DB password is read from the local `db` container.
 
 ```bash
+docker compose up -d --wait
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:22918
+export PROMETHEUS_URL=http://127.0.0.1:22901
+export TRACE_API_URL=http://127.0.0.1:22904
 export SKIP_VAULT=1
-export APP_DB_PASSWORD=grader-secret
+export DATABASE_URL="postgres://app:$(docker compose exec -T db printenv POSTGRES_PASSWORD)@127.0.0.1:5432/marketplace"
+export BROKER_URL=amqp://app:app@127.0.0.1:5672
+export REDIS_URL=redis://127.0.0.1:6390
+export REDIS_QUEUE_URL=redis://127.0.0.1:6391
+export STORAGE_ENDPOINT=http://127.0.0.1:22650
+export STORAGE_REGION=us-east-1
+export STORAGE_ACCESS_KEY=hw26user
+export STORAGE_SECRET_KEY=hw26secretpass
+export STORAGE_BUCKET=hw26-files
 export JWT_KID=grader
 KEYS="$(mktemp -d)"
 node -e 'const {generateKeyPairSync}=require("node:crypto");
@@ -1155,27 +1294,14 @@ export JWT_PRIVATE_KEY="$(cat "$KEYS/priv.b64")"
 export JWT_PUBLIC_KEY="$(cat "$KEYS/pub.b64")"
 rm -rf "$KEYS"
 export REFRESH_TOKEN_PEPPER="$(openssl rand -hex 32)"
-export PULUMI_CONFIG_PASSPHRASE=hw28-grading
-export PULUMI_BACKEND_URL="file://$PWD/.pulumi"
-npm --prefix infra ci
-printf 'dummy-npm-token' > .npm_token
-npm run image:build
-npm run cluster:up
-npm run up
-npm run demo:image
-npm run demo:rollout
-npm run demo:pdb
-SCAN_MAX=-1 npm run scan; echo "exit(max=-1)=$?"
-SCAN_MAX=99999 npm run scan; echo "exit(max=99999)=$?"
+npm ci
+npm run demo:logs
+npm run demo:metrics
+npm run demo:trace
 ```
 
-Tear down after the check: `npm run destroy && npm run cluster:down`. The
-image is loaded into the node with `kind load docker-image` (inside
-`cluster:up`); without that the pod sits in `ErrImagePull`. Rebuilds of the
-image need another `cluster:up` (it is a no-op on an existing cluster and
-reloads the image). A second `npm run up` on the same stack is `10
-unchanged`. `npm run start` without the auth or storage secrets still exits
-non-zero and names every missing variable; it does not open the database
-first. The HW-26 demos (`demo:upload`, `demo:multipart`, `demo:cdn`) and the
-HW-24 ones (`demo:auth`, `demo:reuse`, `demo:rbac`) still run under the
-compose stack from `docker-compose.yml`.
+`--wait` is required: Jaeger has to accept OTLP before `demo:trace`.
+`npm run start` without the auth or storage secrets still exits non-zero
+and names every missing variable; it does not open the database first. The
+HW-28 cluster commands (`image:build`, `cluster:up`, `up`, `demo:rollout`)
+and the HW-26/24 demos still run under the same repo.

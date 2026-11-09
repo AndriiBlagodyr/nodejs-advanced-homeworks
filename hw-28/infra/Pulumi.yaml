@@ -1,0 +1,20 @@
+name: hw28-marketplace
+description: Marketplace API on a local kind cluster (HW-28)
+runtime:
+  name: nodejs
+  options:
+    typescript: true
+# Stack config lives here with defaults, so a fresh clone needs no
+# Pulumi.<stack>.yaml (that file holds the passphrase salt and is not tracked).
+config:
+  profile:
+    type: string
+    default: hardened
+    description: hardened = probes + maxUnavailable 0 + drain; broken = the control run
+  rev:
+    type: string
+    default: "1"
+    description: Goes into the pod template; changing it is what triggers a rollout
+  replicas:
+    type: integer
+    default: 3

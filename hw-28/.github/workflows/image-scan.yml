@@ -1,0 +1,46 @@
+name: Image scan
+
+on:
+  push:
+    branches: [main, hw-28]
+  pull_request:
+    branches: [main]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Build secret for `npm ci` (BuildKit mount). With a real private registry
+      # this is secrets.NPM_TOKEN; the course project has none, so a random decoy.
+      - name: Build-time secret
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then printf '%s' "$NPM_TOKEN" > .npm_token
+          else openssl rand -hex 16 | tr -d '\n' > .npm_token; fi
+
+      - name: Build image
+        run: npm run image:build
+
+      # Working threshold, see README "Kubernetes → Scan gate". The verdict is
+      # computed by the script from the scanner's JSON.
+      - name: Scan gate
+        env:
+          SCAN_MAX: "10"
+          SCAN_SEVERITY: CRITICAL,HIGH
+          SCAN_REPORT: trivy-report.json
+        run: npm run scan
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-report.json
+          if-no-files-found: ignore

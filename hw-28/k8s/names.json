@@ -1,0 +1,10 @@
+{
+  "cluster": "hw28",
+  "context": "kind-hw28",
+  "namespace": "marketplace",
+  "app": "api",
+  "image": "marketplace-api:hw28",
+  "postgresImage": "postgres:17-alpine",
+  "nodePort": 30080,
+  "hostPort": 28080
+}

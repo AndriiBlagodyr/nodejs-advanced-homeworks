@@ -7,6 +7,7 @@ import { OrdersModule } from './orders/orders.module';
 import { redisConfigured } from './redis/clients';
 import { RedisFeaturesModule } from './redis/redis-features.module';
 import { FilesModule } from './files/files.module';
+import { ObservabilityModule } from './observability/observability.module';
 import { storageConfigured } from './storage/config';
 
 @Module({
@@ -20,6 +21,7 @@ import { storageConfigured } from './storage/config';
       }),
     }),
     AuthModule,
+    ObservabilityModule,
     ProductsModule,
     OrdersModule,
     ...(redisConfigured() ? [RedisFeaturesModule] : []),

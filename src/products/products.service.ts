@@ -2,17 +2,22 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan } from 'typeorm';
 import { Product } from '../entities/product.entity';
+import { childLogger } from '../observability/logger';
+import { ProductsRepo } from './products.repo';
 
 export interface ProductPage {
   items: Array<{ id: number; name: string; price_cents: number }>;
   next_cursor: string | null;
 }
 
+const log = childLogger('products.service');
+
 @Injectable()
 export class ProductsService {
   constructor(
     @InjectRepository(Product)
     private readonly repo: Repository<Product>,
+    private readonly products: ProductsRepo,
   ) {}
 
   async findAll(limit = 20, cursor?: string): Promise<ProductPage> {
@@ -57,7 +62,8 @@ export class ProductsService {
   }
 
   async findOne(id: number): Promise<{ id: number; name: string; price_cents: number }> {
-    const p = await this.repo.findOne({ where: { id: String(id) } as any });
+    log.info({ productId: id }, 'get product');
+    const p = await this.products.findById(id);
     if (!p) throw new NotFoundException(`Product ${id} not found`);
     return { id: Number(p.id), name: p.name, price_cents: p.priceCents };
   }

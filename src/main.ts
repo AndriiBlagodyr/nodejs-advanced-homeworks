@@ -1,7 +1,9 @@
+import './observability/instrumentation';
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { AUTH_SECRET_VARS, loadAuthConfig } from './auth/config';
+import { logger } from './observability/logger';
 import { loadStorageConfig, missingStorageVars } from './storage/config';
 import { configureApp } from './configure-app';
 
@@ -24,9 +26,9 @@ async function bootstrap(): Promise<void> {
     console.error(err instanceof Error ? err.message : err);
     process.exit(1);
   }
-  console.log(`auth signing kid=${auth.kid} fingerprint=${auth.fingerprint}`);
+  logger.info({ kid: auth.kid, fingerprint: auth.fingerprint }, 'auth signing key');
 
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { logger: false });
   configureApp(app);
   await app.listen(process.env.PORT ?? 3000);
 }

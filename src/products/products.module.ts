@@ -4,10 +4,11 @@ import { AuthModule } from '../auth/auth.module';
 import { Product } from '../entities/product.entity';
 import { ProductsService } from './products.service';
 import { ProductsController } from './products.controller';
+import { ProductsRepo } from './products.repo';
 
 @Module({
   imports: [AuthModule, TypeOrmModule.forFeature([Product])],
-  providers: [ProductsService],
+  providers: [ProductsService, ProductsRepo],
   controllers: [ProductsController],
   exports: [ProductsService],
 })

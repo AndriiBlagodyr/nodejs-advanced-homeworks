@@ -15,5 +15,6 @@ coverage/
 backups/
 .npm_token
 .pulumi/
+observability/sd/targets.json
 infra/Pulumi.*.yaml
 infra/bin/

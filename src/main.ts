@@ -6,6 +6,7 @@ import { AUTH_SECRET_VARS, loadAuthConfig } from './auth/config';
 import { logger } from './observability/logger';
 import { loadStorageConfig, missingStorageVars } from './storage/config';
 import { configureApp } from './configure-app';
+import { publishMetricsTarget } from './observability/metrics-target';
 
 async function bootstrap(): Promise<void> {
   // Before NestFactory: that opens the database, and a connection error would
@@ -31,6 +32,8 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, { logger: false });
   configureApp(app);
   await app.listen(process.env.PORT ?? 3000);
+  const address = app.getHttpServer().address();
+  if (address && typeof address === 'object') publishMetricsTarget(address.port);
 }
 
 bootstrap().catch((err) => {

@@ -8,6 +8,7 @@ import { hashPassword } from '../auth/password';
 import type { Role } from '../auth/tokens';
 import { configureApp } from '../configure-app';
 import { createDataSourceOptions } from '../data-source';
+import { publishMetricsTarget } from '../observability/metrics-target';
 
 export const DEMO_PASSWORD = 'hw24-demo-password';
 
@@ -88,8 +89,10 @@ export type Running = { app: INestApplication; base: string };
 export async function bootApi(): Promise<Running> {
   const app = await NestFactory.create(AppModule, { logger: false });
   configureApp(app);
-  await app.listen(0, '127.0.0.1');
+  // 0.0.0.0 so Prometheus in compose can scrape the ephemeral port via host.docker.internal.
+  await app.listen(0, '0.0.0.0');
   const { port } = app.getHttpServer().address() as AddressInfo;
+  publishMetricsTarget(port);
   return { app, base: `http://127.0.0.1:${port}` };
 }
 

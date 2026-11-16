@@ -43,6 +43,9 @@ Ports are in `22900–22999`. `docker stats --no-stream` after
 | `JWT_KID` | сховище (#11) | signing key id |
 | `REFRESH_TOKEN_PEPPER` | сховище (#11) | refresh-token hashes |
 | `DATABASE_URL` | compose / оточення | PgBouncer in front of Postgres |
+| `METRICS_TARGET` | оточення | full `host:port` Prometheus should scrape; empty means host + the bound port |
+| `METRICS_TARGET_HOST` | оточення | host when `METRICS_TARGET` is empty (default `host.docker.internal`) |
+| `DEMO_ROUTES` | оточення | `1` mounts `/demo/fail` and `/demo/flush`; unset in `npm start` |
 | `SKIP_VAULT` | environment | `1` for the grader: values come from `export` |
 
 The addresses and Grafana credentials come through `scripts/with-secrets.sh`
@@ -60,9 +63,10 @@ Every line is JSON. The mixin does
 component. `GET /products/:productId` goes through controller, service and
 repository with the same `trace_id`.
 
-Redact lists paths. It does not guess: a nested field that is not in the
-list stays in the line. The listed ones are `req.headers.authorization`,
-`req.body.password` and `req.body.refresh_token`. `/auth/*` bodies are not
+Redact is by key name, at any depth. A key matching `authorization`,
+`password`, `secret`, `token`, `api key` or `cookie` is replaced with
+`[Redacted]`, so a field that was never listed still loses its value.
+`email`, `note`, `trace_id` and `userId` stay. `/auth/*` bodies are not
 logged at all (HW-24 login and refresh). `demo:logs` sends
 `Authorization: Bearer <marker>` and a password with a second marker; the
 request line is there, the markers are not.
@@ -73,6 +77,17 @@ request line is there, the markers are not.
   `http_request_duration_seconds` with the same labels.
 - `route` is the template (`/products/:productId`), from `req.baseUrl` +
   `req.route.path`. A hundred different ids do not add a series.
+- Prometheus scrapes `observability/sd/targets.json` (file service discovery),
+  not a hardcoded `:3000`. After `listen()`, the process writes
+  `METRICS_TARGET` when that is set, otherwise
+  `METRICS_TARGET_HOST` (default `host.docker.internal`) plus the port it
+  actually bound. Demos listen on port 0, on all interfaces. Prometheus scrapes
+  once after a single counted request and twice around the demo traffic, with
+  one more counted request between those two, so `rate()` has an increase even
+  for a series that first appears during the demo (a 500).
+- `/demo/fail` and `/demo/flush` are mounted only when `DEMO_ROUTES=1`.
+  `npm start` leaves them off. `demo:metrics` and `demo:trace` set the flag
+  before the process starts.
 - Buckets: `5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s`. The slow
   demo request sleeps 800 ms. The top finite `le` is 2 s, so
   `histogram_quantile` cannot sit on the last bucket while everything is
@@ -108,8 +123,9 @@ that is how long the API may serve 5xx before the budget is spent.
 
 ### Demos, from my runs
 
-Each demo migrates, boots the API on port 0, drains captured pino lines
-(or `/metrics`) at the start, and exits non-zero if the invariant fails.
+Each demo migrates, boots the API on port 0 (bound on all interfaces so
+Prometheus can scrape it), drains captured pino lines (or `/metrics`) at
+the start, and exits non-zero if the invariant fails.
 
 ```text
 $ npm run demo:logs

@@ -47,9 +47,10 @@ export function metricsMiddleware(req: Request, res: Response, next: NextFunctio
 }
 
 /**
- * Logs the request without taking `req` in any business function. The object
- * is shaped so redact paths (`req.headers.authorization`, `req.body.password`)
- * match; anything not listed stays visible.
+ * Logs the request without taking `req` in any business function. Secret
+ * *key names* are masked at any depth, so a field the request logger never
+ * anticipated still loses its value. Login and refresh bodies stay out
+ * entirely on top of that.
  */
 export function requestLogMiddleware(req: Request, _res: Response, next: NextFunction): void {
   const path = requestPath(req);
@@ -60,8 +61,6 @@ export function requestLogMiddleware(req: Request, _res: Response, next: NextFun
           method: req.method,
           url: req.originalUrl ?? req.url,
           headers: { authorization: req.headers.authorization },
-          // Login and refresh bodies (HW-24) stay out entirely. Redact paths
-          // still cover a password that a non-auth log happens to include.
           body: path.startsWith('/auth/') ? undefined : req.body,
         },
       },

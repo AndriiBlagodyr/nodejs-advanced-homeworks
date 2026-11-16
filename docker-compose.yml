@@ -166,6 +166,7 @@ services:
       - "22901:9090"
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/sd:/etc/prometheus/sd:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

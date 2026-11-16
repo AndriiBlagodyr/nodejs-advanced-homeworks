@@ -4,22 +4,32 @@ import { getContext } from './context';
 import { pushLogLine } from './log-buffer';
 
 /**
- * Paths redact knows about. A nested field that is not listed stays in the
- * line: pino does not guess. Authorization and the login password are listed;
- * a random nested token would not be.
+ * Mask by key name, at any depth. A path whitelist leaves a field the list
+ * never named sitting in the line with its value.
  */
-export const REDACT_PATHS = [
-  'req.headers.authorization',
-  'req.headers.Authorization',
-  'headers.authorization',
-  'authorization',
-  'password',
-  'req.body.password',
-  'body.password',
-  'refresh_token',
-  'req.body.refresh_token',
-  'body.refresh_token',
-];
+const SECRET_KEY = /authorization|password|passwd|secret|token|api[-_]?key|cookie/i;
+
+export const REDACTED = '[Redacted]';
+
+export function censorSecrets(value: unknown, seen = new WeakMap<object, unknown>()): unknown {
+  if (!value || typeof value !== 'object') return value;
+  const cached = seen.get(value);
+  if (cached) return cached;
+  if (Array.isArray(value)) {
+    const copy: unknown[] = [];
+    seen.set(value, copy);
+    for (const item of value) copy.push(censorSecrets(item, seen));
+    return copy;
+  }
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return value;
+  const out: Record<string, unknown> = {};
+  seen.set(value, out);
+  for (const [key, child] of Object.entries(value)) {
+    out[key] = SECRET_KEY.test(key) ? REDACTED : censorSecrets(child, seen);
+  }
+  return out;
+}
 
 const destination = {
   write(chunk: string): void {
@@ -43,7 +53,11 @@ export const logger = pino(
         idempotencyKey: ctx?.idempotencyKey,
       };
     },
-    redact: { paths: REDACT_PATHS, censor: '[Redacted]' },
+    formatters: {
+      log(object) {
+        return censorSecrets(object) as Record<string, unknown>;
+      },
+    },
   },
   destination,
 );

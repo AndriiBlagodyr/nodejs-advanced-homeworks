@@ -1,5 +1,6 @@
 import '../observability/instrumentation';
 import { takeLogLines } from '../observability/log-buffer';
+import { scrapeAfterTraffic, scrapeBeforeTraffic } from '../observability/metrics-target';
 import { bootApi, migrate } from './auth-kit';
 import { fail, report } from './demo-kit';
 import { drainLogs, makeTraceparent, send } from './observe-kit';
@@ -12,9 +13,12 @@ const LAYERS = ['products.controller', 'products.service', 'products.repo'];
 async function main(): Promise<void> {
   await migrate();
   const api = await bootApi();
+  const port = Number(new URL(api.base).port);
+  const scrapedAt = await scrapeBeforeTraffic(api.base, port);
   takeLogLines();
   try {
     const { lines, ok } = await run(api.base);
+    await scrapeAfterTraffic(api.base, port, scrapedAt);
     report(lines, ok);
   } finally {
     await api.app.close();

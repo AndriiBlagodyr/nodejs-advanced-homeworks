@@ -1,7 +1,12 @@
 import pino from 'pino';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { DURATION_BUCKETS_SECONDS, TOP_FINITE_BUCKET_SECONDS } from '../../src/observability/config';
-import { REDACT_PATHS } from '../../src/observability/logger';
+import { censorSecrets, REDACTED } from '../../src/observability/logger';
 import { routeTemplate } from '../../src/observability/metrics';
+import { metricsTarget, publishMetricsTarget, scrapeStampQuery } from '../../src/observability/metrics-target';
+import { demoRoutesEnabled } from '../../src/observability/observability.module';
 import { hasRoute, rawIdRoute } from '../../src/demos/observe-kit';
 
 describe('observability policy', () => {
@@ -28,25 +33,68 @@ describe('observability policy', () => {
     expect(routeTemplate({ baseUrl: '', route: undefined } as any)).toBe('unmatched');
   });
 
-  it('redacts listed paths and leaves an unlisted nested field', () => {
+  it('masks a secret by key name at any depth and keeps an ordinary field', () => {
     const lines: string[] = [];
     const log = pino(
-      { redact: { paths: REDACT_PATHS, censor: '[Redacted]' } },
+      {
+        formatters: {
+          log(object) {
+            return censorSecrets(object) as Record<string, unknown>;
+          },
+        },
+      },
       { write: (s: string) => lines.push(s) },
     );
     log.info(
       {
         req: {
           headers: { authorization: 'Bearer hw29-secret-token-aaaaaaaa' },
-          body: { password: 'hw29-secret-password-bbbbbbbb', nested: { token: 'visible-nested' } },
+          body: {
+            password: 'hw29-secret-password-bbbbbbbb',
+            email: 'ada@example.com',
+            nested: { token: 'not-on-any-path', note: 'keep-me' },
+            client_secret: 'client-secret-value',
+          },
         },
+        trace_id: 'abc',
+        userId: 'user-1',
       },
       'request',
     );
     const dumped = lines.join('');
-    expect(dumped).toContain('[Redacted]');
+    expect(dumped).toContain(REDACTED);
     expect(dumped).not.toContain('hw29-secret-token-aaaaaaaa');
     expect(dumped).not.toContain('hw29-secret-password-bbbbbbbb');
-    expect(dumped).toContain('visible-nested');
+    expect(dumped).not.toContain('not-on-any-path');
+    expect(dumped).not.toContain('client-secret-value');
+    expect(dumped).toContain('ada@example.com');
+    expect(dumped).toContain('keep-me');
+    expect(dumped).toContain('user-1');
+    expect(censorSecrets({ trace_id: 'abc', idempotencyKey: 'k' })).toEqual({
+      trace_id: 'abc',
+      idempotencyKey: 'k',
+    });
+  });
+
+  it('mounts the demo routes only when DEMO_ROUTES=1', () => {
+    expect(demoRoutesEnabled({ DEMO_ROUTES: '1' })).toBe(true);
+    expect(demoRoutesEnabled({})).toBe(false);
+    expect(demoRoutesEnabled({ DEMO_ROUTES: 'true' })).toBe(false);
+  });
+
+  it('builds the scrape address from the environment and the bound port', () => {
+    expect(metricsTarget(49123, {})).toBe('host.docker.internal:49123');
+    expect(metricsTarget(49123, { METRICS_TARGET_HOST: 'api.internal' })).toBe('api.internal:49123');
+    expect(metricsTarget(49123, { METRICS_TARGET: 'prom-can-see-me:3000' })).toBe('prom-can-see-me:3000');
+    expect(scrapeStampQuery('host.docker.internal:49123')).toBe(
+      'timestamp(up{instance="host.docker.internal:49123"}) and on(instance) (up{instance="host.docker.internal:49123"} == 1)',
+    );
+
+    const dir = mkdtempSync(join(tmpdir(), 'hw29-sd-'));
+    const file = join(dir, 'targets.json');
+    publishMetricsTarget(49123, { METRICS_SD_FILE: file, METRICS_TARGET_HOST: 'host.docker.internal' });
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual([
+      { targets: ['host.docker.internal:49123'], labels: { job: 'api' } },
+    ]);
   });
 });

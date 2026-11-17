@@ -35,7 +35,6 @@ jobs:
           PULUMI_BACKEND_URL: s3://${{ vars.HW31_STATE_BUCKET }}
           PULUMI_CONFIG_PASSPHRASE: hw31-not-a-secret
           AWS_REGION: eu-central-1
-          PATH: /home/runner/.pulumi/bin:${PATH}
         run: |
           set -euo pipefail
           if [ -z "${HW31_STATE_BUCKET:-}" ]; then

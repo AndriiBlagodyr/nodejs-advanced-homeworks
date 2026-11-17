@@ -35,7 +35,7 @@ teardown-run: прогін `workflow_dispatch` ще не здано. Перше 
 
 ### Дозволи ролі `hw31-gha-teardown`
 
-Trust: `Principal.Federated` на `token.actions.githubusercontent.com`, `StringEquals` на `aud` = `sts.amazonaws.com`, `StringLike` на `sub` = `repo:AndriiBlagodyr/nodejs-advanced-homeworks:*`. В `Action` зірки немає. `Resource: "*"` стоїть там, де API EC2, RDS, ELB, IAM і Budgets не приймають ARN ресурсу. Бакет стану обмежений його власним ARN.
+Trust: `Principal.Federated` на `token.actions.githubusercontent.com`, `StringEquals` на `aud` = `sts.amazonaws.com`, `StringLike` на `sub` = `repo:AndriiBlagodyr/nodejs-advanced-homeworks:*` і на незмінний суб'єкт цього репозиторію `repo:AndriiBlagodyr@44027355/nodejs-advanced-homeworks@1345837420:*`. GitHub для цього репозиторію віддає саме другий `sub`, тож без нього `AssumeRoleWithWebIdentity` повертає AccessDenied. В `Action` зірки немає. `Resource: "*"` стоїть там, де API EC2, RDS, ELB, IAM і Budgets не приймають ARN ресурсу. Бакет стану обмежений його власним ARN.
 
 - `budgets:ModifyBudget` — створити і змінити бюджет $5.
 - `budgets:ViewBudget` — прочитати бюджет під час destroy.

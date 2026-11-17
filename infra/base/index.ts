@@ -197,7 +197,10 @@ const assumeRole = pulumi.interpolate`{
     "Action": "sts:AssumeRoleWithWebIdentity",
     "Condition": {
       "StringEquals": { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
-      "StringLike": { "token.actions.githubusercontent.com:sub": "repo:${githubRepo}:*" }
+      "StringLike": { "token.actions.githubusercontent.com:sub": [
+        "repo:${githubRepo}:*",
+        "repo:AndriiBlagodyr@44027355/nodejs-advanced-homeworks@1345837420:*"
+      ] }
     }
   }]
 }`;

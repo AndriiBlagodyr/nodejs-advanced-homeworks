@@ -19,7 +19,10 @@
               "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
             },
             "StringLike": {
-              "token.actions.githubusercontent.com:sub": "repo:AndriiBlagodyr/nodejs-advanced-homeworks:*"
+              "token.actions.githubusercontent.com:sub": [
+                "repo:AndriiBlagodyr/nodejs-advanced-homeworks:*",
+                "repo:AndriiBlagodyr@44027355/nodejs-advanced-homeworks@1345837420:*"
+              ]
             }
           }
         }

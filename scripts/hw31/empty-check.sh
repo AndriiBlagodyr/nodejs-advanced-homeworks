@@ -66,7 +66,7 @@ for file in evidence/demo-state.json evidence/base-state.json; do
     echo "missing $file" >&2
     exit 1
   fi
-  n="$(jq '[.deployment.resources[] | select(.type | startswith("aws:"))] | length' "$file")"
+  n="$(jq '[((.deployment.resources // [])[]) | select(.type | startswith("aws:"))] | length' "$file")"
   state_left=$((state_left + $(as_int "$n")))
 done
 

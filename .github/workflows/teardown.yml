@@ -57,7 +57,16 @@ jobs:
               if [ "$which" = demo ] && ! pulumi config get hw31:dbPassword --non-interactive >/dev/null 2>&1; then
                 pulumi config set --secret hw31:dbPassword "unused-for-destroy" --non-interactive
               fi
+              if [ "$which" = base ]; then
+                # Pulumi deletes the inline policy before the role. The role then
+                # cannot list its own instance profiles, so drop it from state and
+                # clear its tags. The emptiness check still uses this role.
+                pulumi state delete 'urn:pulumi:base::hw31-base::aws:iam/role:Role::gha-teardown' --yes --force || true
+              fi
               pulumi destroy --yes --non-interactive
+              if [ "$which" = base ]; then
+                aws iam untag-role --role-name hw31-gha-teardown --tag-keys Project Stack ManagedBy || true
+              fi
               pulumi stack export > "$GITHUB_WORKSPACE/evidence/${which}-state.json"
             elif printf '%s' "$err" | grep -q 'no stack named'; then
               echo '{"deployment":{"resources":[]}}' > "$GITHUB_WORKSPACE/evidence/${which}-state.json"

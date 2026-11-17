@@ -11,7 +11,8 @@ Previous snapshots: `hw-03/` … `hw-16/`, `hw-18/`, `hw-19/`, `hw-22/`, `hw-23/
 ## AWS
 
 смуга: основна
-teardown-run: прогін `workflow_dispatch` ще не здано. Перше посилання виду `actions/runs/<id>` у цьому файлі має бути саме на нього, після того як в логу стоять шість нулів.
+https://github.com/AndriiBlagodyr/nodejs-advanced-homeworks/actions/runs/44171907792
+Лог цього `workflow_dispatch` закінчується шістьма нулями: `state-resources-left=0`, `tagged-resources-left=0`, `rds-left=0`, `alb-left=0`, `nat-left=0`, `eip-left=0`.
 Регіон: `eu-central-1`. Програми Pulumi — `infra/base` і `infra/demo`. Failover зайняв 142 секунди, це поза спостереженням 60–120, але в межах критерію 20–600. Сім скриптів `up:base`, `up:demo`, `destroy:demo`, `destroy:base`, `demo:failover`, `demo:nat`, `demo:alb` оголошені в кореневому `package.json`, не в `hw-05/package.json` (його `git ls-files` віддає першим). Усі сім ідуть через `scripts/with-secrets.sh`.
 
 Цей акаунт AWS уже існував до завдання, тож Free plan і кредити недоступні. З першої хвилини списуються живі гроші: бюджет і нічне знесення — єдиний захист.

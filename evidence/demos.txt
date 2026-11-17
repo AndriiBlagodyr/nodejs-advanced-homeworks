@@ -1,0 +1,9 @@
+alb-dns=hw31-alb-2025865826.eu-central-1.elb.amazonaws.com
+http-code=200
+target-state=healthy
+az-before=eu-central-1a
+az-after=eu-central-1b
+failover-seconds=142
+event=Applying modification to convert to a Multi-AZ DB Instance
+nat-minutes=3
+nat-billed-hours=1

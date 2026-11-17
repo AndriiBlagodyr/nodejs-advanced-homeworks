@@ -1,0 +1,6 @@
+name: hw31-base
+description: HW-31 base stack. Budget, network, IAM. Nothing billed by the hour.
+runtime:
+  name: nodejs
+  options:
+    typescript: true

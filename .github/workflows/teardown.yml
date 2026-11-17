@@ -1,0 +1,73 @@
+name: teardown
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  teardown:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.HW31_CI_ROLE_ARN }}
+          aws-region: eu-central-1
+
+      - name: install pulumi
+        run: |
+          curl -fsSL https://get.pulumi.com | sh
+          echo "$HOME/.pulumi/bin" >> "$GITHUB_PATH"
+
+      - name: destroy demo then base
+        env:
+          HW31_STATE_BUCKET: ${{ vars.HW31_STATE_BUCKET }}
+          PULUMI_BACKEND_URL: s3://${{ vars.HW31_STATE_BUCKET }}
+          PULUMI_CONFIG_PASSPHRASE: hw31-not-a-secret
+          AWS_REGION: eu-central-1
+          PATH: /home/runner/.pulumi/bin:${PATH}
+        run: |
+          set -euo pipefail
+          if [ -z "${HW31_STATE_BUCKET:-}" ]; then
+            echo "missing GitHub variable HW31_STATE_BUCKET" >&2
+            exit 1
+          fi
+          mkdir -p evidence
+          for which in demo base; do
+            cd "$GITHUB_WORKSPACE/infra/$which"
+            npm ci --no-audit --no-fund
+            if err="$(pulumi stack select "$which" --non-interactive 2>&1)"; then
+              # The committed yaml has no email, bucket or db password. CI has no
+              # GitHub Secret for them. Fill only the keys this checkout cannot see.
+              if ! pulumi config get hw31:stateBucket --non-interactive >/dev/null 2>&1; then
+                pulumi config set hw31:stateBucket "$HW31_STATE_BUCKET" --non-interactive
+              fi
+              if [ "$which" = base ] && ! pulumi config get hw31:budgetEmail --non-interactive >/dev/null 2>&1; then
+                pulumi config set hw31:budgetEmail "ci-destroy@example.com" --non-interactive
+              fi
+              if [ "$which" = demo ] && ! pulumi config get hw31:dbPassword --non-interactive >/dev/null 2>&1; then
+                pulumi config set --secret hw31:dbPassword "unused-for-destroy" --non-interactive
+              fi
+              pulumi destroy --yes --non-interactive
+              pulumi stack export > "$GITHUB_WORKSPACE/evidence/${which}-state.json"
+            elif printf '%s' "$err" | grep -q 'no stack named'; then
+              echo '{"deployment":{"resources":[]}}' > "$GITHUB_WORKSPACE/evidence/${which}-state.json"
+            else
+              printf '%s\n' "$err" >&2
+              exit 1
+            fi
+            cd "$GITHUB_WORKSPACE"
+          done
+
+      - name: six emptiness checks
+        run: bash scripts/hw31/empty-check.sh

@@ -1,0 +1,42 @@
+import './observability/instrumentation';
+import 'reflect-metadata';
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+import { AUTH_SECRET_VARS, loadAuthConfig } from './auth/config';
+import { logger } from './observability/logger';
+import { loadStorageConfig, missingStorageVars } from './storage/config';
+import { configureApp } from './configure-app';
+import { publishMetricsTarget } from './observability/metrics-target';
+
+async function bootstrap(): Promise<void> {
+  // Before NestFactory: that opens the database, and a connection error would
+  // hide the name of the missing secret.
+  const missing = [
+    ...AUTH_SECRET_VARS.filter((name) => !process.env[name]?.trim()),
+    ...missingStorageVars(),
+  ];
+  if (missing.length > 0) {
+    console.error(`missing required secret: ${missing.join(', ')}`);
+    process.exit(1);
+  }
+  let auth;
+  try {
+    auth = loadAuthConfig();
+    loadStorageConfig();
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : err);
+    process.exit(1);
+  }
+  logger.info({ kid: auth.kid, fingerprint: auth.fingerprint }, 'auth signing key');
+
+  const app = await NestFactory.create(AppModule, { logger: false });
+  configureApp(app);
+  await app.listen(process.env.PORT ?? 3000);
+  const address = app.getHttpServer().address();
+  if (address && typeof address === 'object') publishMetricsTarget(address.port);
+}
+
+bootstrap().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

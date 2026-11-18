@@ -1,0 +1,87 @@
+name: Contract Tests
+
+on:
+  push:
+    branches: [hw-16, main]
+  pull_request:
+    branches: [main]
+
+env:
+  PACT_BROKER_URL: ${{ secrets.PACT_BROKER_URL }}
+  PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+  PROVIDER_VERSION: ${{ github.sha }}
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    services:
+      pact-broker-db:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: pact
+          POSTGRES_PASSWORD: pact
+          POSTGRES_DB: pact
+        options: >-
+          --health-cmd "pg_isready -U pact -d pact"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 5433:5432
+
+      pact-broker:
+        image: pactfoundation/pact-broker:latest
+        env:
+          PACT_BROKER_DATABASE_URL: postgres://pact:pact@pact-broker-db:5432/pact
+          PACT_BROKER_BASIC_AUTH_USERNAME: pact
+          PACT_BROKER_BASIC_AUTH_PASSWORD: pact
+        ports:
+          - 9292:9292
+        options: >-
+          --health-cmd "wget -q -O /dev/null http://pact:pact@127.0.0.1:9292/diagnostic/status/heartbeat || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - name: Generate consumer contract
+        run: npm run test:contract
+
+      - name: Publish contract to broker
+        run: |
+          BROKER_URL="${PACT_BROKER_URL:-http://127.0.0.1:9292}"
+          curl -v -X PUT \
+            "$BROKER_URL/pacts/provider/MarketplaceAPI/consumer/MarketplaceFrontend/version/${{ github.sha }}" \
+            -H "Content-Type: application/json" \
+            -u "pact:pact" \
+            -d @pacts/MarketplaceFrontend-MarketplaceAPI.json
+
+      - name: Verify provider against contract
+        env:
+          PACT_BROKER_URL: http://127.0.0.1:9292
+          PACT_BROKER_TOKEN: ""
+          PROVIDER_VERSION: ${{ github.sha }}
+        run: npm run verify:provider
+
+      - name: Tag provider version as prod
+        run: |
+          BROKER_URL="${PACT_BROKER_URL:-http://127.0.0.1:9292}"
+          curl -X PUT \
+            "$BROKER_URL/pacticipants/MarketplaceAPI/versions/${{ github.sha }}/tags/prod" \
+            -H "Content-Type: application/json" \
+            -u "pact:pact"
+
+      - name: Can I deploy?
+        run: |
+          BROKER_URL="${PACT_BROKER_URL:-http://127.0.0.1:9292}"
+          RESULT=$(curl -s "$BROKER_URL/can-i-deploy?pacticipant=MarketplaceFrontend&version=${{ github.sha }}&to=prod" -u "pact:pact")
+          echo "$RESULT"
+          echo "$RESULT" | grep -q '"deployable":true'

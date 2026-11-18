@@ -6,7 +6,219 @@ happened". The answer is a minute, not an evening: a JSON line, a RED
 dashboard, and a trace whose `trace_id` is the same in the log, the span
 and the incoming `traceparent`.
 
-Previous snapshots: `hw-03/` … `hw-16/`, `hw-18/`, `hw-19/`, `hw-22/`, `hw-23/`, `hw-24/`, `hw-26/`, `hw-28/`.
+Previous snapshots: `hw-03/` … `hw-16/`, `hw-18/`, `hw-19/`, `hw-22/`, `hw-23/`, `hw-24/`, `hw-26/`, `hw-28/`, `hw-29/`.
+
+## AWS
+
+смуга: основна
+https://github.com/AndriiBlagodyr/nodejs-advanced-homeworks/actions/runs/44171907792
+Лог цього `workflow_dispatch` закінчується шістьма нулями: `state-resources-left=0`, `tagged-resources-left=0`, `rds-left=0`, `alb-left=0`, `nat-left=0`, `eip-left=0`.
+Регіон: `eu-central-1`. Програми Pulumi — `infra/base` і `infra/demo`. Failover зайняв 142 секунди, це поза спостереженням 60–120, але в межах критерію 20–600. Сім скриптів `up:base`, `up:demo`, `destroy:demo`, `destroy:base`, `demo:failover`, `demo:nat`, `demo:alb` оголошені в кореневому `package.json`, не в `hw-05/package.json` (його `git ls-files` віддає першим). Усі сім ідуть через `scripts/with-secrets.sh`.
+
+Цей акаунт AWS уже існував до завдання, тож Free plan і кредити недоступні. З першої хвилини списуються живі гроші: бюджет і нічне знесення — єдиний захист.
+
+Не створюй AWS Organizations і не підіймай Control Tower. З FAQ: кредити Free Tier згорають одразу, free account plan сам стає paid, і назад на Free повернутись не можна.
+
+### Погодинна ставка
+
+Місяць — 730 годин. Рядки Франкфурта нижче — знімок прайс-листа з умови, дата публікації в тексті ДЗ **24.08.2026**. 16.11.2026 публічна сторінка ALB віддала лише американський приклад $0,0225/год і не віддала рядок eu-central-1 (JSON прайсу відповідав 403/404). Курс НБУ на 16.11.2026 — **45,4274 грн/$**. Якщо бодай один франкфуртський рядок зміниться, перерахуй усі похідні.
+
+| Рядок | Ставка (знімок 24.08.2026) | 730 год | грн за 730 год |
+| --- | --- | --- | --- |
+| ALB | $0,02700/год | $19,71 | 895,37 |
+| RDS db.t4g.micro PostgreSQL, Multi-AZ instance | $0,03700/год | $27,01 | 1226,99 |
+| gp3 20 ГіБ, Multi-AZ ($0,274/ГіБ-міс × 20) | $5,48/міс | $5,48 | 248,94 |
+| Public IPv4 × 2 під ALB | $0,00500/год × 2 | $7,30 | 331,62 |
+| LCU | припущення навчального навантаження, не рядок прайсу | $0,29 | 13,17 |
+| Разом | $0,08191/год | $59,79 | 2716,10 |
+
+Похідні з того самого числа: 4 год = $0,33 ≈ 15,00 грн; доба = $1,97 ≈ 89,49 грн. $200 кредитів ÷ $1,97 ≈ 101 доба. NAT, якого в постійному стеку немає, коштує $0,052/год плюс його Public IPv4 $0,005: одна білена година вправи = $0,057. Лаг бюджету 12 год × $0,08191 = $0,98. Мінімум RDS 10 хвилин: $0,0370 × 10/60 = $0,0062. Округлення різне: часткова година NAT і ALB білиться як повна; RDS — посекундно, але не менше десяти хвилин.
+
+### Дозволи ролі `hw31-gha-teardown`
+
+Trust: `Principal.Federated` на `token.actions.githubusercontent.com`, `StringEquals` на `aud` = `sts.amazonaws.com`, `StringLike` на `sub` = `repo:AndriiBlagodyr/nodejs-advanced-homeworks:*` і на незмінний суб'єкт цього репозиторію `repo:AndriiBlagodyr@44027355/nodejs-advanced-homeworks@1345837420:*`. GitHub для цього репозиторію віддає саме другий `sub`, тож без нього `AssumeRoleWithWebIdentity` повертає AccessDenied. В `Action` зірки немає. `Resource: "*"` стоїть там, де API EC2, RDS, ELB і Budgets не приймають ARN ресурсу. `iam:PutRolePolicy` і `iam:AttachRolePolicy` обмежені `role/hw31-*`. Бакет стану обмежений його власним ARN.
+
+- `budgets:ModifyBudget` — створити і змінити бюджет $5.
+- `budgets:ViewBudget` — прочитати бюджет під час destroy.
+- `budgets:ListTagsForResource` — теги бюджету: default tags провайдера пишуть їх на ресурс.
+- `budgets:TagResource` — теги бюджету: default tags провайдера пишуть їх на ресурс.
+- `budgets:UntagResource` — теги бюджету: default tags провайдера пишуть їх на ресурс.
+- `ec2:DescribeAvailabilityZones` — прочитати мережу, NAT або адресу в перевірках знесення.
+- `ec2:DescribeVpcs` — прочитати мережу, NAT або адресу в перевірках знесення.
+- `ec2:DescribeVpcAttribute` — прочитати мережу, NAT або адресу в перевірках знесення.
+- `ec2:DescribeSubnets` — прочитати мережу, NAT або адресу в перевірках знесення.
+- `ec2:DescribeInternetGateways` — прочитати мережу, NAT або адресу в перевірках знесення.
+- `ec2:DescribeRouteTables` — прочитати мережу, NAT або адресу в перевірках знесення.
+- `ec2:DescribeSecurityGroups` — прочитати мережу, NAT або адресу в перевірках знесення.
+- `ec2:DescribeSecurityGroupRules` — прочитати мережу, NAT або адресу в перевірках знесення.
+- `ec2:DescribeNatGateways` — прочитати мережу, NAT або адресу в перевірках знесення.
+- `ec2:DescribeAddresses` — прочитати мережу, NAT або адресу в перевірках знесення.
+- `ec2:DescribeAddressesAttribute` — прочитати мережу, NAT або адресу в перевірках знесення.
+- `ec2:DescribeNetworkInterfaces` — прочитати мережу, NAT або адресу в перевірках знесення.
+- `ec2:DescribeAccountAttributes` — прочитати мережу, NAT або адресу в перевірках знесення.
+- `ec2:CreateVpc` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:DeleteVpc` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:ModifyVpcAttribute` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:CreateSubnet` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:DeleteSubnet` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:ModifySubnetAttribute` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:CreateInternetGateway` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:DeleteInternetGateway` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:AttachInternetGateway` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:DetachInternetGateway` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:CreateRouteTable` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:DeleteRouteTable` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:AssociateRouteTable` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:DisassociateRouteTable` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:CreateRoute` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:DeleteRoute` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:ReplaceRoute` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:CreateSecurityGroup` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:DeleteSecurityGroup` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:AuthorizeSecurityGroupIngress` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:AuthorizeSecurityGroupEgress` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:RevokeSecurityGroupIngress` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:RevokeSecurityGroupEgress` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:CreateNatGateway` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:DeleteNatGateway` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:AllocateAddress` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:ReleaseAddress` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:AssociateAddress` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:DisassociateAddress` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:CreateTags` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:DeleteTags` — створити або знести VPC, підмережу, IGW, маршрут, security group, NAT чи Elastic IP.
+- `ec2:DescribeTags` — прочитати мережу, NAT або адресу в перевірках знесення.
+- `rds:CreateDBInstance` — створити, змінити або знести Multi-AZ інстанс і subnet group.
+- `rds:DeleteDBInstance` — створити, змінити або знести Multi-AZ інстанс і subnet group.
+- `rds:DescribeDBInstances` — прочитати інстанс, subnet group, снапшот або подію failover.
+- `rds:ModifyDBInstance` — створити, змінити або знести Multi-AZ інстанс і subnet group.
+- `rds:RebootDBInstance` — керований failover, --force-failover.
+- `rds:ListTagsForResource` — прочитати інстанс, subnet group, снапшот або подію failover.
+- `rds:AddTagsToResource` — створити, змінити або знести Multi-AZ інстанс і subnet group.
+- `rds:RemoveTagsFromResource` — створити, змінити або знести Multi-AZ інстанс і subnet group.
+- `rds:CreateDBSubnetGroup` — створити, змінити або знести Multi-AZ інстанс і subnet group.
+- `rds:DeleteDBSubnetGroup` — створити, змінити або знести Multi-AZ інстанс і subnet group.
+- `rds:DescribeDBSubnetGroups` — прочитати інстанс, subnet group, снапшот або подію failover.
+- `rds:ModifyDBSubnetGroup` — створити, змінити або знести Multi-AZ інстанс і subnet group.
+- `rds:DescribeEvents` — прочитати інстанс, subnet group, снапшот або подію failover.
+- `rds:DescribeOrderableDBInstanceOptions` — прочитати інстанс, subnet group, снапшот або подію failover.
+- `rds:DescribeDBEngineVersions` — прочитати інстанс, subnet group, снапшот або подію failover.
+- `rds:DescribeDBSnapshots` — прочитати інстанс, subnet group, снапшот або подію failover.
+- `rds:DeleteDBSnapshot` — прибрати снапшот, якщо він лишився у стані.
+- `elasticloadbalancing:CreateLoadBalancer` — створити або знести ALB, listener і target group.
+- `elasticloadbalancing:DeleteLoadBalancer` — створити або знести ALB, listener і target group.
+- `elasticloadbalancing:DescribeLoadBalancers` — прочитати ALB, listener, target group або стан цілі.
+- `elasticloadbalancing:DescribeLoadBalancerAttributes` — прочитати ALB, listener, target group або стан цілі.
+- `elasticloadbalancing:ModifyLoadBalancerAttributes` — створити або знести ALB, listener і target group.
+- `elasticloadbalancing:SetSecurityGroups` — створити або знести ALB, listener і target group.
+- `elasticloadbalancing:SetSubnets` — створити або знести ALB, listener і target group.
+- `elasticloadbalancing:CreateTargetGroup` — створити або знести ALB, listener і target group.
+- `elasticloadbalancing:DeleteTargetGroup` — створити або знести ALB, listener і target group.
+- `elasticloadbalancing:DescribeTargetGroups` — прочитати ALB, listener, target group або стан цілі.
+- `elasticloadbalancing:DescribeTargetGroupAttributes` — прочитати ALB, listener, target group або стан цілі.
+- `elasticloadbalancing:ModifyTargetGroup` — створити або знести ALB, listener і target group.
+- `elasticloadbalancing:ModifyTargetGroupAttributes` — створити або знести ALB, listener і target group.
+- `elasticloadbalancing:DescribeTargetHealth` — прочитати ALB, listener, target group або стан цілі.
+- `elasticloadbalancing:RegisterTargets` — створити або знести ALB, listener і target group.
+- `elasticloadbalancing:DeregisterTargets` — створити або знести ALB, listener і target group.
+- `elasticloadbalancing:CreateListener` — створити або знести ALB, listener і target group.
+- `elasticloadbalancing:DeleteListener` — створити або знести ALB, listener і target group.
+- `elasticloadbalancing:DescribeListeners` — прочитати ALB, listener, target group або стан цілі.
+- `elasticloadbalancing:DescribeListenerAttributes` — прочитати ALB, listener, target group або стан цілі.
+- `elasticloadbalancing:DescribeRules` — прочитати ALB, listener, target group або стан цілі.
+- `elasticloadbalancing:ModifyListener` — створити або знести ALB, listener і target group.
+- `elasticloadbalancing:DescribeTags` — прочитати ALB, listener, target group або стан цілі.
+- `elasticloadbalancing:AddTags` — створити або знести ALB, listener і target group.
+- `elasticloadbalancing:RemoveTags` — створити або знести ALB, listener і target group.
+- `lambda:CreateFunction` — функція, яку викликає ALB, і дозвіл на цей виклик.
+- `lambda:DeleteFunction` — функція, яку викликає ALB, і дозвіл на цей виклик.
+- `lambda:GetFunction` — функція, яку викликає ALB, і дозвіл на цей виклик.
+- `lambda:GetFunctionConfiguration` — функція, яку викликає ALB, і дозвіл на цей виклик.
+- `lambda:GetFunctionCodeSigningConfig` — функція, яку викликає ALB, і дозвіл на цей виклик.
+- `lambda:GetRuntimeManagementConfig` — функція, яку викликає ALB, і дозвіл на цей виклик.
+- `lambda:UpdateFunctionCode` — функція, яку викликає ALB, і дозвіл на цей виклик.
+- `lambda:UpdateFunctionConfiguration` — функція, яку викликає ALB, і дозвіл на цей виклик.
+- `lambda:AddPermission` — функція, яку викликає ALB, і дозвіл на цей виклик.
+- `lambda:RemovePermission` — функція, яку викликає ALB, і дозвіл на цей виклик.
+- `lambda:GetPolicy` — функція, яку викликає ALB, і дозвіл на цей виклик.
+- `lambda:ListVersionsByFunction` — функція, яку викликає ALB, і дозвіл на цей виклик.
+- `lambda:TagResource` — функція, яку викликає ALB, і дозвіл на цей виклик.
+- `lambda:UntagResource` — функція, яку викликає ALB, і дозвіл на цей виклик.
+- `lambda:ListTags` — функція, яку викликає ALB, і дозвіл на цей виклик.
+- `iam:CreateRole` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:DeleteRole` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:GetRole` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:GetPolicy` — прочитати AWSLambdaBasicExecutionRole під час refresh.
+- `iam:GetPolicyVersion` — прочитати AWSLambdaBasicExecutionRole під час refresh.
+- `iam:UpdateAssumeRolePolicy` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:PassRole` — передати роль виконання Lambda; користувачів ця роль не створює.
+- `iam:TagRole` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:UntagRole` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:ListRolePolicies` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:PutRolePolicy` — лише `role/hw31-*`: роль не може дописати політику чужій ролі.
+- `iam:GetRolePolicy` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:DeleteRolePolicy` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:ListAttachedRolePolicies` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:AttachRolePolicy` — лише `role/hw31-*`: роль не може прикріпити політику чужій ролі.
+- `iam:DetachRolePolicy` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:ListInstanceProfilesForRole` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:CreateOpenIDConnectProvider` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:DeleteOpenIDConnectProvider` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:GetOpenIDConnectProvider` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:ListOpenIDConnectProviders` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:TagOpenIDConnectProvider` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:UntagOpenIDConnectProvider` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:UpdateOpenIDConnectProviderThumbprint` — OIDC provider, роль CI і роль виконання Lambda.
+- `tag:GetResources` — знайти хвости за тегом Project=nodejs-pro-hw31.
+- `s3:ListBucket` — читати і писати стан Pulumi лише в бакеті HW31_STATE_BUCKET.
+- `s3:GetBucketLocation` — читати і писати стан Pulumi лише в бакеті HW31_STATE_BUCKET.
+- `s3:GetBucketVersioning` — читати і писати стан Pulumi лише в бакеті HW31_STATE_BUCKET.
+- `s3:ListBucketVersions` — читати і писати стан Pulumi лише в бакеті HW31_STATE_BUCKET.
+- `s3:ListBucketMultipartUploads` — читати і писати стан Pulumi лише в бакеті HW31_STATE_BUCKET.
+- `s3:GetObject` — читати і писати стан Pulumi лише в бакеті HW31_STATE_BUCKET.
+- `s3:PutObject` — читати і писати стан Pulumi лише в бакеті HW31_STATE_BUCKET.
+- `s3:DeleteObject` — читати і писати стан Pulumi лише в бакеті HW31_STATE_BUCKET.
+- `s3:AbortMultipartUpload` — читати і писати стан Pulumi лише в бакеті HW31_STATE_BUCKET.
+- `s3:ListMultipartUploadParts` — читати і писати стан Pulumi лише в бакеті HW31_STATE_BUCKET.
+- `s3:GetObjectVersion` — читати і писати стан Pulumi лише в бакеті HW31_STATE_BUCKET.
+- `s3:DeleteObjectVersion` — читати і писати стан Pulumi лише в бакеті HW31_STATE_BUCKET.
+
+Негативний тест, обидва прогони на AWS, не в емуляторі:
+
+```
+aws iam simulate-principal-policy --policy-source-arn <arn ролі> --action-names rds:DescribeDBInstances
+aws iam simulate-principal-policy --policy-source-arn <arn ролі> --action-names iam:CreateUser
+```
+
+`node scripts/hw31/evidence-iam.mjs` (через `scripts/with-secrets.sh`) пише розкодовані trust + permission policy в `evidence/iam.json` і рядки `sim-allowed=` / `sim-denied=` в `evidence/iam.txt`. Поки `up:base` не виконано, цих файлів немає: підставляти `allowed` руками не можна.
+
+### RDS Multi-AZ проти стека з #15
+
+Стек #15 — один Postgres, PgBouncer попереду і `scripts/backup.sh` (`pg_dump -Fc`) плюс restore-drill. Streaming replica там прямо винесена за межі роботи. RDS забирає на себе синхронний standby в іншій AZ (це не читабельна репліка), автоматичні бекапи з `backupRetentionPeriod: 1`, шифрування диска ключем AWS `aws/rds` і керований failover. Він не замінює PgBouncer, не дає репліку, з якої можна читати, і не замінює логічний дамп поза коробкою: снапшот RDS лежить у тому самому акаунті, а `backup.sh` лишається окремим drill. Відповідь не «усе».
+
+### KMS
+
+KMS — не заміна сховищу з #11, а шар під ним: ключ, яким шифрується `ENCRYPTION_KEY`. Сам ключ застосунку і JWT як і раніше приїжджають зі сховища через `scripts/with-secrets.sh`. `storageEncrypted: true` на RDS використовує ключ AWS `aws/rds`. Власний customer-managed key не створюється: це рядок рахунку, який не зникає від `destroy` того ж дня. Бакет стану теж шифрується SSE-S3 (AES256), не CMK.
+
+### Чим бекенд стану відрізняється від #28
+
+На #28 бекенд — `file://$PWD/.pulumi`. Воркер GitHub цей каталог не бачить, тому `destroy` з Actions не дійшов би до стека. Тут бекенд — приватний S3-бакет у тому самому акаунті (`PULUMI_BACKEND_URL=s3://$HW31_STATE_BUCKET`), без тега `Project` (інакше перевірка хвостів не стане нулем, доки бакет живий). Доступ CI — та сама OIDC-роль, не ключ і не токен Pulumi Cloud. Пароль бази й пошта бюджету після `up` лежать у конфізі стека, тож нічний `destroy` їх не питає. `PULUMI_CONFIG_PASSPHRASE=hw31-not-a-secret` однаковий локально і в workflow. Це не секрет: бакет приватний, а роль звужена до репозиторію. Не роби `pulumi login` і `aws configure` — вони переписують глобальний стан. `pulumi config set --secret hw31:dbPassword` дописує шифротекст у `infra/demo/Pulumi.demo.yaml`; цей рядок не коміть.
+
+Теги (`Project=nodejs-pro-hw31`, `Stack`, `ManagedBy=pulumi`) і регіон стоять у `Pulumi.<stack>.yaml` і ще раз на явному `aws.Provider`, щоб регіон не брався з `~/.aws/config`. Бюджет — на весь акаунт, без фільтра по тегу: як cost-allocation key тег починає працювати не одразу. Бюджет — перший ресурс, VPC чекає на нього. Лист, не гальмо: `ACTUAL`, поріг 20% від $5, `FORECASTED` немає.
+
+Приватна таблиця маршрутів не має `0.0.0.0/0` на IGW. NAT за прапорцем створюється в demo і не вішається на цю таблицю. Ціль ALB — Lambda, не EC2, щоб у таблицю не потрапив ще один погодинний інстанс і ще одна Public IPv4. Hosted zone не створюється. Трансформ на `aws:rds/instance:Instance` виставляє `deletionProtection: false` і `skipFinalSnapshot: true` до створення інстанса.
+
+Перевірки порожнечі в `.github/workflows/teardown.yml` друкують кожен ключ один раз: сума `eu-central-1` і `us-east-1`. Порядок джоби — destroy demo (поки base ще існує), destroy base, `stack export`, потім шість чисел. `--remove` до export не викликається. GitHub Actions variables, не Secrets: `HW31_CI_ROLE_ARN` (вихід `ciRoleArn`) і `HW31_STATE_BUCKET`.
+
+Після зданого прогону знеси і base (`npm run destroy:base`): він коштує $0, але роль із правом знесення не має жити довше за курс. Бакет стану видали окремо, вже після шести нулів у логу.
+
+### Що ще видно з рахунку
+
+Два NAT Gateway (по одному на AZ) за ставками знімка: $0,052 × 2 × 730 = $75,92 плюс дві Public IPv4 $7,30, разом $83,22. У чужому прогоні 24.08.2026 топологія з двома NAT вийшла $142,72/міс, і NAT разом зі своїми адресами був 58,3%. Цих позицій немає на схемі. Стокгольм у тому прогоні дешевший на 9,8%, нерівномірно (NAT −11,5%, ALB −11,3%, RDS −11%, Public IPv4 і егрес ті самі). Свій стек у eu-north-1 я не піднімав: 16.11.2026 франкфуртський прайс не віддався, тож різницю не вигадую.
+
+Gateway endpoint для S3 безкоштовний і замінює NAT лише для трафіку до S3 в тому самому регіоні. Він не дає виходу до Docker Hub, до RDS API і до будь-якого іншого адресата: для них як і раніше потрібен NAT або публічна підмережа. Interface endpoint, на відміну від gateway, тарифікується погодинно.
+
+Дія бюджету, яка зупиняє RDS, прийде з тим самим лагом 8–12 годин. За 12 годин цей стек встигає намотати близько $0,98, і вона не знімає ALB, його дві Public IPv4 і NAT. Лист і тип акаунта зупиняють рахунок раніше, ніж ця дія.
 
 ## Observability
 

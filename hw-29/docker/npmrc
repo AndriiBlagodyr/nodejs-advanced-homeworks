@@ -1,0 +1,4 @@
+# Private scope of the course project. The token comes from the BuildKit
+# secret at `npm ci` time; this file only holds the variable name.
+@hw28-private:registry=https://npm.private.invalid/
+//npm.private.invalid/:_authToken=${NPM_TOKEN}

@@ -1,0 +1,6 @@
+name: hw31-demo
+description: HW-31 demo stack. RDS, ALB, and a NAT gateway behind a flag.
+runtime:
+  name: nodejs
+  options:
+    typescript: true

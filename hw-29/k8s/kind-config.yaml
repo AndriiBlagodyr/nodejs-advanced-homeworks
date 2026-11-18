@@ -1,0 +1,13 @@
+# One node is enough for everything graded here. The NodePort of the API is
+# published on the host, so the load generator talks to the Service exactly
+# like an external client would (no port-forward, which pins one pod).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: hw28
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 28080
+        listenAddress: "127.0.0.1"
+        protocol: TCP

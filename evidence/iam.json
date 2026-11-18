@@ -1,0 +1,257 @@
+{
+  "Role": {
+    "Path": "/",
+    "RoleName": "hw31-gha-teardown",
+    "RoleId": "AROATAH5HPQ5Y5SDGQLVU",
+    "Arn": "arn:aws:iam::206689500219:role/hw31-gha-teardown",
+    "CreateDate": "2026-11-17T19:06:34+00:00",
+    "AssumeRolePolicyDocument": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": {
+            "Federated": "arn:aws:iam::206689500219:oidc-provider/token.actions.githubusercontent.com"
+          },
+          "Action": "sts:AssumeRoleWithWebIdentity",
+          "Condition": {
+            "StringEquals": {
+              "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+            },
+            "StringLike": {
+              "token.actions.githubusercontent.com:sub": [
+                "repo:AndriiBlagodyr/nodejs-advanced-homeworks:*",
+                "repo:AndriiBlagodyr@44027355/nodejs-advanced-homeworks@1345837420:*"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "Description": "GitHub Actions OIDC role that destroys the HW-31 stacks.",
+    "MaxSessionDuration": 3600,
+    "Tags": [
+      {
+        "Key": "ManagedBy",
+        "Value": "pulumi"
+      },
+      {
+        "Key": "Project",
+        "Value": "nodejs-pro-hw31"
+      },
+      {
+        "Key": "Stack",
+        "Value": "base"
+      }
+    ],
+    "RoleLastUsed": {}
+  },
+  "Policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Action": [
+          "budgets:ModifyBudget",
+          "budgets:ViewBudget",
+          "budgets:ListTagsForResource",
+          "budgets:TagResource",
+          "budgets:UntagResource"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "Budget"
+      },
+      {
+        "Action": [
+          "ec2:DescribeAvailabilityZones",
+          "ec2:DescribeVpcs",
+          "ec2:DescribeVpcAttribute",
+          "ec2:DescribeSubnets",
+          "ec2:DescribeInternetGateways",
+          "ec2:DescribeRouteTables",
+          "ec2:DescribeSecurityGroups",
+          "ec2:DescribeSecurityGroupRules",
+          "ec2:DescribeNatGateways",
+          "ec2:DescribeAddresses",
+          "ec2:DescribeAddressesAttribute",
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:DescribeAccountAttributes",
+          "ec2:CreateVpc",
+          "ec2:DeleteVpc",
+          "ec2:ModifyVpcAttribute",
+          "ec2:CreateSubnet",
+          "ec2:DeleteSubnet",
+          "ec2:ModifySubnetAttribute",
+          "ec2:CreateInternetGateway",
+          "ec2:DeleteInternetGateway",
+          "ec2:AttachInternetGateway",
+          "ec2:DetachInternetGateway",
+          "ec2:CreateRouteTable",
+          "ec2:DeleteRouteTable",
+          "ec2:AssociateRouteTable",
+          "ec2:DisassociateRouteTable",
+          "ec2:CreateRoute",
+          "ec2:DeleteRoute",
+          "ec2:ReplaceRoute",
+          "ec2:CreateSecurityGroup",
+          "ec2:DeleteSecurityGroup",
+          "ec2:AuthorizeSecurityGroupIngress",
+          "ec2:AuthorizeSecurityGroupEgress",
+          "ec2:RevokeSecurityGroupIngress",
+          "ec2:RevokeSecurityGroupEgress",
+          "ec2:CreateNatGateway",
+          "ec2:DeleteNatGateway",
+          "ec2:AllocateAddress",
+          "ec2:ReleaseAddress",
+          "ec2:AssociateAddress",
+          "ec2:DisassociateAddress",
+          "ec2:CreateTags",
+          "ec2:DeleteTags",
+          "ec2:DescribeTags"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "Network"
+      },
+      {
+        "Action": [
+          "rds:CreateDBInstance",
+          "rds:DeleteDBInstance",
+          "rds:DescribeDBInstances",
+          "rds:ModifyDBInstance",
+          "rds:RebootDBInstance",
+          "rds:ListTagsForResource",
+          "rds:AddTagsToResource",
+          "rds:RemoveTagsFromResource",
+          "rds:CreateDBSubnetGroup",
+          "rds:DeleteDBSubnetGroup",
+          "rds:DescribeDBSubnetGroups",
+          "rds:ModifyDBSubnetGroup",
+          "rds:DescribeEvents",
+          "rds:DescribeOrderableDBInstanceOptions",
+          "rds:DescribeDBEngineVersions",
+          "rds:DescribeDBSnapshots",
+          "rds:DeleteDBSnapshot"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "Database"
+      },
+      {
+        "Action": [
+          "elasticloadbalancing:CreateLoadBalancer",
+          "elasticloadbalancing:DeleteLoadBalancer",
+          "elasticloadbalancing:DescribeLoadBalancers",
+          "elasticloadbalancing:DescribeLoadBalancerAttributes",
+          "elasticloadbalancing:ModifyLoadBalancerAttributes",
+          "elasticloadbalancing:SetSecurityGroups",
+          "elasticloadbalancing:SetSubnets",
+          "elasticloadbalancing:CreateTargetGroup",
+          "elasticloadbalancing:DeleteTargetGroup",
+          "elasticloadbalancing:DescribeTargetGroups",
+          "elasticloadbalancing:DescribeTargetGroupAttributes",
+          "elasticloadbalancing:ModifyTargetGroup",
+          "elasticloadbalancing:ModifyTargetGroupAttributes",
+          "elasticloadbalancing:DescribeTargetHealth",
+          "elasticloadbalancing:RegisterTargets",
+          "elasticloadbalancing:DeregisterTargets",
+          "elasticloadbalancing:CreateListener",
+          "elasticloadbalancing:DeleteListener",
+          "elasticloadbalancing:DescribeListeners",
+          "elasticloadbalancing:DescribeListenerAttributes",
+          "elasticloadbalancing:DescribeRules",
+          "elasticloadbalancing:ModifyListener",
+          "elasticloadbalancing:DescribeTags",
+          "elasticloadbalancing:AddTags",
+          "elasticloadbalancing:RemoveTags"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "LoadBalancer"
+      },
+      {
+        "Action": [
+          "lambda:CreateFunction",
+          "lambda:DeleteFunction",
+          "lambda:GetFunction",
+          "lambda:GetFunctionConfiguration",
+          "lambda:GetFunctionCodeSigningConfig",
+          "lambda:GetRuntimeManagementConfig",
+          "lambda:UpdateFunctionCode",
+          "lambda:UpdateFunctionConfiguration",
+          "lambda:AddPermission",
+          "lambda:RemovePermission",
+          "lambda:GetPolicy",
+          "lambda:ListVersionsByFunction",
+          "lambda:TagResource",
+          "lambda:UntagResource",
+          "lambda:ListTags"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "LambdaTarget"
+      },
+      {
+        "Action": [
+          "iam:CreateRole",
+          "iam:DeleteRole",
+          "iam:GetRole",
+          "iam:GetPolicy",
+          "iam:GetPolicyVersion",
+          "iam:UpdateAssumeRolePolicy",
+          "iam:PassRole",
+          "iam:TagRole",
+          "iam:UntagRole",
+          "iam:ListRolePolicies",
+          "iam:PutRolePolicy",
+          "iam:GetRolePolicy",
+          "iam:DeleteRolePolicy",
+          "iam:ListAttachedRolePolicies",
+          "iam:AttachRolePolicy",
+          "iam:DetachRolePolicy",
+          "iam:ListInstanceProfilesForRole",
+          "iam:CreateOpenIDConnectProvider",
+          "iam:DeleteOpenIDConnectProvider",
+          "iam:GetOpenIDConnectProvider",
+          "iam:ListOpenIDConnectProviders",
+          "iam:TagOpenIDConnectProvider",
+          "iam:UntagOpenIDConnectProvider",
+          "iam:UpdateOpenIDConnectProviderThumbprint"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "RolesForThisStack"
+      },
+      {
+        "Action": [
+          "tag:GetResources"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "FindLeftovers"
+      },
+      {
+        "Action": [
+          "s3:ListBucket",
+          "s3:GetBucketLocation",
+          "s3:GetBucketVersioning",
+          "s3:ListBucketVersions",
+          "s3:ListBucketMultipartUploads",
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:AbortMultipartUpload",
+          "s3:ListMultipartUploadParts",
+          "s3:GetObjectVersion",
+          "s3:DeleteObjectVersion"
+        ],
+        "Effect": "Allow",
+        "Resource": [
+          "arn:aws:s3:::hw31-pulumi-state-b38e14d8f2a1",
+          "arn:aws:s3:::hw31-pulumi-state-b38e14d8f2a1/*"
+        ],
+        "Sid": "StateBucket"
+      }
+    ]
+  }
+}

@@ -35,7 +35,6 @@ jobs:
           PULUMI_BACKEND_URL: s3://${{ vars.HW31_STATE_BUCKET }}
           PULUMI_CONFIG_PASSPHRASE: hw31-not-a-secret
           AWS_REGION: eu-central-1
-          PATH: /home/runner/.pulumi/bin:${PATH}
         run: |
           set -euo pipefail
           if [ -z "${HW31_STATE_BUCKET:-}" ]; then
@@ -43,6 +42,8 @@ jobs:
             exit 1
           fi
           mkdir -p evidence
+          role_urn='urn:pulumi:base::hw31-base::aws:iam/role:Role::gha-teardown'
+          policy_urn='urn:pulumi:base::hw31-base::aws:iam/rolePolicy:RolePolicy::gha-teardown'
           for which in demo base; do
             cd "$GITHUB_WORKSPACE/infra/$which"
             npm ci --no-audit --no-fund
@@ -58,8 +59,18 @@ jobs:
               if [ "$which" = demo ] && ! pulumi config get hw31:dbPassword --non-interactive >/dev/null 2>&1; then
                 pulumi config set --secret hw31:dbPassword "unused-for-destroy" --non-interactive
               fi
-              pulumi destroy --yes --non-interactive
-              pulumi stack export > "$GITHUB_WORKSPACE/evidence/${which}-state.json"
+              if [ "$which" = base ] && pulumi stack export | jq -e --arg urn "$role_urn" \
+                '[.deployment.resources[].urn] | index($urn) != null' >/dev/null; then
+                # Leave the CI role until the last step. Pulumi removes its policy
+                # first, and the role then cannot delete itself.
+                pulumi destroy --yes --non-interactive \
+                  --exclude "$role_urn" --exclude "$policy_urn"
+              else
+                pulumi destroy --yes --non-interactive
+              fi
+              if [ "$which" != base ]; then
+                pulumi stack export > "$GITHUB_WORKSPACE/evidence/${which}-state.json"
+              fi
             elif printf '%s' "$err" | grep -q 'no stack named'; then
               echo '{"deployment":{"resources":[]}}' > "$GITHUB_WORKSPACE/evidence/${which}-state.json"
             else
@@ -68,6 +79,42 @@ jobs:
             fi
             cd "$GITHUB_WORKSPACE"
           done
+          # Destroy skipped this role because Pulumi deletes its policy first and
+          # then can no longer delete the role. Remove that state record and
+          # delete the role itself. A failed DeleteRole stops the job, and the
+          # role keeps its tags, so the emptiness check cannot call it zero.
+          role_name=hw31-gha-teardown
+          cd "$GITHUB_WORKSPACE/infra/base"
+          if pulumi stack select base --non-interactive >/dev/null 2>&1; then
+            if pulumi stack export | jq -e --arg urn "$policy_urn" \
+              '[.deployment.resources[].urn] | index($urn) != null' >/dev/null; then
+              pulumi state delete "$policy_urn" --yes --force
+            fi
+            if pulumi stack export | jq -e --arg urn "$role_urn" \
+              '[.deployment.resources[].urn] | index($urn) != null' >/dev/null; then
+              pulumi state delete "$role_urn" --yes --force
+            fi
+            pulumi stack export > "$GITHUB_WORKSPACE/evidence/base-state.json"
+          fi
+          cd "$GITHUB_WORKSPACE"
+          if aws iam get-role --role-name "$role_name" >/dev/null 2>&1; then
+            policies="$(aws iam list-role-policies --role-name "$role_name" --query 'PolicyNames[]' --output text)"
+            attached="$(aws iam list-attached-role-policies --role-name "$role_name" --query 'AttachedPolicies[].PolicyArn' --output text)"
+            profiles="$(aws iam list-instance-profiles-for-role --role-name "$role_name" --query 'InstanceProfiles[].InstanceProfileName' --output text)"
+            for item in $profiles; do
+              [ "$item" = None ] && continue
+              aws iam remove-role-from-instance-profile --instance-profile-name "$item" --role-name "$role_name"
+            done
+            for item in $attached; do
+              [ "$item" = None ] && continue
+              aws iam detach-role-policy --role-name "$role_name" --policy-arn "$item"
+            done
+            for item in $policies; do
+              [ "$item" = None ] && continue
+              aws iam delete-role-policy --role-name "$role_name" --policy-name "$item"
+            done
+            aws iam delete-role --role-name "$role_name"
+          fi
 
       - name: six emptiness checks
         run: bash scripts/hw31/empty-check.sh

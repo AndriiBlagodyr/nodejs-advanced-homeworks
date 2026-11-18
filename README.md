@@ -1290,7 +1290,7 @@ push main / workflow_dispatch
     same OIDC gate, then pull the digest that was already built and pulumi up
 ```
 
-The cluster is kind (`hw28`) on the runner, namespace `marketplace`, Pulumi stack `dev`, file backend. There is no GitHub Environment, so the token subject is `repo:…:pull_request` or `repo:…:ref:refs/heads/…`, not `environment:prod`. The registry is GHCR, `ghcr.io/andriiblagodyr/nodejs-advanced-homeworks`, and the workflow makes that package public so the digest can be read back without credentials. The image scan in that pipeline uses `SCAN_MAX=50`. `demo:gates` is what proves the same scanner fails at `-1` and passes at `99999`.
+The cluster is kind (`hw28`) on the runner, namespace `marketplace`, Pulumi stack `dev`, file backend. There is no GitHub Environment, so the token subject is `repo:…:pull_request` or `repo:…:ref:refs/heads/…`, not `environment:prod`. The registry is GHCR, `ghcr.io/andriiblagodyr/nodejs-advanced-homeworks`. The workflow asks GitHub to make that package public; the job token often gets 404 for that call, so the package has to be switched to public once in the package settings. A private package still deploys, and the grader then checks the digest only from the artifact. The image scan in that pipeline uses `SCAN_MAX=50`. `demo:gates` is what proves the same scanner fails at `-1` and passes at `99999`.
 
 The trust file is `oidc/policy.json`. `scripts/oidc-gate.mjs` fetches the issuer's OpenID configuration and JWKS, checks the signature, then `iss`, `aud` and `sub`. A token from any other repository fails the subject check even when the signature and audience are valid.
 

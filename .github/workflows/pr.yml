@@ -43,7 +43,10 @@ jobs:
           node scripts/style-lint.mjs src
 
       - name: Contract
-        run: node scripts/contract-diff.mjs openapi.yaml openapi.yaml
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          git show origin/main:openapi.yaml > "$RUNNER_TEMP/openapi.base.yaml"
+          node scripts/contract-diff.mjs "$RUNNER_TEMP/openapi.base.yaml" openapi.yaml
 
       - name: Architecture
         run: ./node_modules/.bin/depcruise --config .dependency-cruiser.cjs src

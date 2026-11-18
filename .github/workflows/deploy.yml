@@ -55,6 +55,7 @@ jobs:
         env:
           DIGEST_INPUT: ${{ inputs.digest }}
         run: |
+          set -o pipefail
           if [ -n "${DIGEST_INPUT:-}" ]; then
             echo "present=1" >> "$GITHUB_OUTPUT"
             echo "digest=${DIGEST_INPUT}" >> "$GITHUB_OUTPUT"
@@ -66,7 +67,7 @@ jobs:
             echo "no image published for this commit"
             exit 0
           fi
-          digest="$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')"
+          digest="$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' | jq -r .digest)"
           echo "present=1" >> "$GITHUB_OUTPUT"
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 

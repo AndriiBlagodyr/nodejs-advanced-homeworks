@@ -16,13 +16,18 @@ const keys = generateKeyPairSync('ec', {
   publicKeyEncoding: { type: 'spki', format: 'pem' },
 });
 
-const lines = [
-  `APP_DB_PASSWORD=${randomBytes(18).toString('hex')}`,
-  `JWT_PRIVATE_KEY=${Buffer.from(keys.privateKey).toString('base64')}`,
-  `JWT_PUBLIC_KEY=${Buffer.from(keys.publicKey).toString('base64')}`,
-  'JWT_KID=ci',
-  `REFRESH_TOKEN_PEPPER=${randomBytes(32).toString('hex')}`,
-  `PULUMI_CONFIG_PASSPHRASE=${randomBytes(16).toString('hex')}`,
+const values = [
+  ['APP_DB_PASSWORD', randomBytes(18).toString('hex')],
+  ['JWT_PRIVATE_KEY', Buffer.from(keys.privateKey).toString('base64')],
+  ['JWT_PUBLIC_KEY', Buffer.from(keys.publicKey).toString('base64')],
+  ['JWT_KID', 'ci'],
+  ['REFRESH_TOKEN_PEPPER', randomBytes(32).toString('hex')],
+  ['PULUMI_CONFIG_PASSPHRASE', randomBytes(16).toString('hex')],
 ];
-appendFileSync(envFile, `${lines.join('\n')}\n`);
+// Actions prints the job environment at the start of every later step.
+// Register the mask before the value is stored, and do not print the value.
+for (const [name, value] of values) {
+  process.stdout.write(`::add-mask::${value}\n`);
+  appendFileSync(envFile, `${name}=${value}\n`);
+}
 console.log('job secrets generated');

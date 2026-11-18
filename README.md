@@ -1311,9 +1311,9 @@ The trust file is `oidc/policy.json`. `scripts/oidc-gate.mjs` fetches the issuer
 | `REFRESH_TOKEN_PEPPER` | сховище (#11) | HMAC pepper for refresh tokens |
 | `PULUMI_CONFIG_PASSPHRASE` | сховище (#11) | encrypts the local Pulumi state file |
 
-GitHub's log mask replaces an exact copy of a secret value. It does not know that the value was base64-encoded, split, or printed by a tool in some other shape. This pipeline does not `echo` a secret, does not run `printenv` or `set -x` in a step that can see one, and does not rely on the mask. That is the sixth place a secret can leak, after git history, application logs, an image layer, `docker inspect` and `docker history`.
+GitHub's log mask replaces an exact copy of a secret value. It does not know that the value was base64-encoded, split, or printed by a tool in some other shape. Actions prints the job environment at the start of every later step, so the values generated for the job are registered with that mask before they are stored. This pipeline does not `echo` a secret and does not run `printenv` or `set -x` in a step that can see one. That is the sixth place a secret can leak, after git history, application logs, an image layer, `docker inspect` and `docker history`.
 
-`src/mapping.ts` prices pod CPU and memory requests. The rates are the public AWS Fargate Linux/x86 prices (https://aws.amazon.com/fargate/pricing/): $0.04048 per vCPU-hour and $0.004445 per GB-hour, times 730 hours. The gate compares that sum with `COST_BUDGET_USD`. A pull request label skips the gate.
+`src/mapping.ts` prices pod CPU and memory requests and multiplies each pair by the deployment replica count. The rates are the public AWS Fargate Linux/x86 prices (https://aws.amazon.com/fargate/pricing/): $0.04048 per vCPU-hour and $0.004445 per GB-hour, times 730 hours. The gate compares that sum with `COST_BUDGET_USD`. A pull request label skips the gate.
 
 cost-gate-bypass-label: cost-approved
 

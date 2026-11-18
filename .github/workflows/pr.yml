@@ -191,7 +191,7 @@ jobs:
       - name: Pulumi preview
         run: |
           # pulumi preview writes plan.json for the cost gate. pulumi up follows only if this passes.
-          npm run preview -- --json > pipeline-evidence/plan.json
+          npm run --silent preview -- --json > pipeline-evidence/plan.json
 
       - name: Cost gate
         env:

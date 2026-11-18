@@ -73,8 +73,10 @@ export function planCostUsd(raw: string): number {
     }
   }
   if (pairs.size === 0) {
+    // `npm run` prints its script banner before the preview JSON.
+    const start = raw.indexOf('{');
     try {
-      visit(JSON.parse(raw), pairs);
+      visit(JSON.parse(start >= 0 ? raw.slice(start) : raw), pairs);
     } catch {
       return 0;
     }

@@ -9,6 +9,7 @@ export PULUMI_BACKEND_URL="${PULUMI_BACKEND_URL:-file://$ROOT/.pulumi}"
 mkdir -p "${PULUMI_BACKEND_URL#file://}"
 
 cd "$ROOT/infra"
-[ -d node_modules ] || npm ci --no-audit --no-fund
+# stdout of this script is the preview JSON. Install logs go to stderr.
+[ -d node_modules ] || npm ci --no-audit --no-fund >&2
 pulumi stack select dev --create --non-interactive >/dev/null
 exec pulumi "$@"

@@ -84,7 +84,7 @@ Covering indexes (`INCLUDE`, `DESC`) are created only in the migration. On
 `Order` they are declared as `@Index('…', { synchronize: false })` so a later
 `migration:generate` does not emit a false DROP/CREATE.
 
-## Grading
+## Snapshot check
 
 ```bash
 docker compose up -d --wait

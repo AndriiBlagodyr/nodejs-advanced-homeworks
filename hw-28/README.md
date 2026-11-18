@@ -1129,7 +1129,7 @@ no matter how careful the relay is.
   `npm run outbox:purge` (one-shot sweep). The relay never declares topology.
   With `REDIS_QUEUE_URL` set, the consumer also enqueues `send-receipt`.
 
-## Grading
+## Snapshot check
 
 No cloud account. Everything graded runs on a local kind cluster. The
 grader has no vault, so the block uses `SKIP_VAULT=1` and one-time values:

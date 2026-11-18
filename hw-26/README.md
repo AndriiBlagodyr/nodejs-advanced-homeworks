@@ -821,7 +821,7 @@ no matter how careful the relay is.
   `npm run outbox:purge` (one-shot sweep). The relay never declares topology.
   With `REDIS_QUEUE_URL` set, the consumer also enqueues `send-receipt`.
 
-## Grading
+## Snapshot check
 
 The storage is the local MinIO from `docker-compose.yml` (port `22650`). Its
 dev credentials are already in the compose file and are not a secret. No AWS

@@ -8,7 +8,8 @@
 // Optional: SCAN_SEVERITY (default CRITICAL,HIGH), SCAN_FIXABLE_ONLY (default
 // 1: only findings with a fixed version, i.e. something we could act on),
 // SCAN_IMAGE (default the image from k8s/names.json), SCAN_REPORT (keep the
-// raw JSON there, e.g. as a CI artifact).
+// raw JSON there, e.g. as a CI artifact). SCAN_REPORT_IN skips Docker and
+// counts a report that is already on disk; the verdict is still computed.
 
 import { execFile } from 'node:child_process';
 import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -41,31 +42,35 @@ async function docker(args, timeout) {
 const dir = mkdtempSync(join(tmpdir(), 'hw28-scan-'));
 let report;
 try {
-  try {
-    await docker(['image', 'inspect', image], 30_000);
-  } catch {
-    exitWith(2, `image ${image} not found: run npm run image:build first`);
+  if (process.env.SCAN_REPORT_IN) {
+    report = JSON.parse(readFileSync(process.env.SCAN_REPORT_IN, 'utf8'));
+  } else {
+    try {
+      await docker(['image', 'inspect', image], 30_000);
+    } catch {
+      exitWith(2, `image ${image} not found: run npm run image:build first`);
+    }
+    await docker(['save', '-o', join(dir, 'image.tar'), image], 300_000);
+    const args = [
+      'run', '--rm',
+      '-v', `${dir}:/scan`,
+      '-v', `${CACHE_VOLUME}:/root/.cache/trivy`,
+      TRIVY_IMAGE,
+      'image', '--input', '/scan/image.tar',
+      '--scanners', 'vuln',
+      '--severity', severities.join(','),
+      '--format', 'json', '--output', '/scan/report.json',
+      '--quiet',
+    ];
+    if (fixableOnly) args.push('--ignore-unfixed');
+    try {
+      await docker(args, 900_000);
+    } catch (err) {
+      exitWith(2, `scanner failed, no verdict: ${err.stderr || err.message}`);
+    }
+    report = JSON.parse(readFileSync(join(dir, 'report.json'), 'utf8'));
+    if (process.env.SCAN_REPORT) copyFileSync(join(dir, 'report.json'), process.env.SCAN_REPORT);
   }
-  await docker(['save', '-o', join(dir, 'image.tar'), image], 300_000);
-  const args = [
-    'run', '--rm',
-    '-v', `${dir}:/scan`,
-    '-v', `${CACHE_VOLUME}:/root/.cache/trivy`,
-    TRIVY_IMAGE,
-    'image', '--input', '/scan/image.tar',
-    '--scanners', 'vuln',
-    '--severity', severities.join(','),
-    '--format', 'json', '--output', '/scan/report.json',
-    '--quiet',
-  ];
-  if (fixableOnly) args.push('--ignore-unfixed');
-  try {
-    await docker(args, 900_000);
-  } catch (err) {
-    exitWith(2, `scanner failed, no verdict: ${err.stderr || err.message}`);
-  }
-  report = JSON.parse(readFileSync(join(dir, 'report.json'), 'utf8'));
-  if (process.env.SCAN_REPORT) copyFileSync(join(dir, 'report.json'), process.env.SCAN_REPORT);
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

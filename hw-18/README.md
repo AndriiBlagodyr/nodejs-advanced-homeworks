@@ -65,7 +65,7 @@ instances: a client on instance A never sees `server.to(...)` from instance B.
 That is fixed with a Redis adapter (`@socket.io/redis-adapter`) so rooms and
 emits are shared across processes.
 
-## Grading
+## Snapshot check
 
 ```bash
 docker compose up -d --wait

@@ -11,6 +11,8 @@ const profile = parseProfile(config.get('profile') ?? 'hardened');
 const rev = config.get('rev') ?? '1';
 const replicas = config.getNumber('replicas') ?? 3;
 const names = loadNames();
+// CI promotes one digest. Local runs keep the tag from k8s/names.json.
+const image = process.env.HW32_IMAGE?.trim() || names.image;
 
 const PORT = 3000;
 const DB_USER = 'app';
@@ -165,7 +167,7 @@ const deployment = new k8s.apps.v1.Deployment(
           containers: [
             {
               name: names.app,
-              image: names.image,
+              image,
               imagePullPolicy: 'IfNotPresent',
               ports: [{ name: 'http', containerPort: PORT }],
               env: [

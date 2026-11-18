@@ -1273,6 +1273,50 @@ no matter how careful the relay is.
   `npm run outbox:purge` (one-shot sweep). The relay never declares topology.
   With `REDIS_QUEUE_URL` set, the consumer also enqueues `send-receipt`.
 
+## CI/CD
+
+Merging `hw-32` is gated by `.github/workflows/pr.yml`. Pushing `main` (and a manual run) is `.github/workflows/deploy.yml`. The image is built in one job. The deploy job takes that job's digest output and gives the same digest to kind. Nothing in the deploy workflow builds an image.
+
+```
+pull_request / workflow_dispatch
+  build
+    types (tsc + style lint) → contract (OpenAPI diff) → architecture (dependency-cruiser)
+    → one image build → GHCR → scan
+  deploy  (needs build; the only job with id-token: write)
+    OIDC signature gate → kind → pulumi preview → cost gate → pulumi up → demo:rollout
+    → upload pipeline-evidence (always)
+push main / workflow_dispatch
+  deploy
+    same OIDC gate, then pull the digest that was already built and pulumi up
+```
+
+The cluster is kind (`hw28`) on the runner, namespace `marketplace`, Pulumi stack `dev`, file backend. There is no GitHub Environment, so the token subject is `repo:…:pull_request` or `repo:…:ref:refs/heads/…`, not `environment:prod`. The registry is GHCR, `ghcr.io/andriiblagodyr/nodejs-advanced-homeworks`, and the workflow makes that package public so the digest can be read back without credentials. The image scan in that pipeline uses `SCAN_MAX=50`. `demo:gates` is what proves the same scanner fails at `-1` and passes at `99999`.
+
+The trust file is `oidc/policy.json`. `scripts/oidc-gate.mjs` fetches the issuer's OpenID configuration and JWKS, checks the signature, then `iss`, `aud` and `sub`. A token from any other repository fails the subject check even when the signature and audience are valid.
+
+| Secret | What it is for |
+| --- | --- |
+| `NPM_TOKEN` | BuildKit secret for `npm ci` inside the image. The course registry is not private; the workflow substitutes a random value when this is unset. |
+| `PACT_BROKER_URL` | Optional broker for the contract workflow. |
+| `PACT_BROKER_TOKEN` | Optional broker token for the contract workflow. |
+
+`GITHUB_TOKEN` is the job token (packages and the id token). It is not a long-lived cloud key. No AWS, GCP or Azure key is stored as a repository secret.
+
+| Variable | Where it lives | What it is for |
+| --- | --- | --- |
+| `APP_DB_PASSWORD` | сховище (#11) | Postgres password; the pod reads it from the K8s Secret as `DB_PASSWORD` |
+| `JWT_PRIVATE_KEY` | сховище (#11) | base64 PKCS#8 P-256 PEM |
+| `JWT_PUBLIC_KEY` | сховище (#11) | base64 SPKI PEM of the same key |
+| `JWT_KID` | сховище (#11) | key id |
+| `REFRESH_TOKEN_PEPPER` | сховище (#11) | HMAC pepper for refresh tokens |
+| `PULUMI_CONFIG_PASSPHRASE` | сховище (#11) | encrypts the local Pulumi state file |
+
+GitHub's log mask replaces an exact copy of a secret value. It does not know that the value was base64-encoded, split, or printed by a tool in some other shape. This pipeline does not `echo` a secret, does not run `printenv` or `set -x` in a step that can see one, and does not rely on the mask. That is the sixth place a secret can leak, after git history, application logs, an image layer, `docker inspect` and `docker history`.
+
+`src/mapping.ts` prices pod CPU and memory requests. The rates are the public AWS Fargate Linux/x86 prices (https://aws.amazon.com/fargate/pricing/): $0.04048 per vCPU-hour and $0.004445 per GB-hour, times 730 hours. The gate compares that sum with `COST_BUDGET_USD`. A pull request label skips the gate.
+
+cost-gate-bypass-label: cost-approved
+
 ## Grading
 
 No cloud account. The observability stand is the Jaeger / Prometheus /
@@ -1321,3 +1365,21 @@ npm run demo:trace
 and names every missing variable; it does not open the database first. The
 HW-28 cluster commands (`image:build`, `cluster:up`, `up`, `demo:rollout`)
 and the HW-26/24 demos still run under the same repo.
+
+HW-32, from a clean checkout. The three commands do not need a cluster or GitHub. `gate:cost` reads a `plan.json` produced by a pipeline run; it is not committed.
+
+```bash
+git clone https://github.com/AndriiBlagodyr/nodejs-advanced-homeworks.git
+cd nodejs-advanced-homeworks
+git checkout hw-32
+npm ci
+export SKIP_VAULT=1
+export APP_DB_PASSWORD=grader-secret
+export JWT_PRIVATE_KEY=grader-secret
+export JWT_PUBLIC_KEY=grader-secret
+export JWT_KID=grader
+export REFRESH_TOKEN_PEPPER=grader-secret
+npm run demo:gates
+npm run demo:oidc
+PLAN_JSON=/tmp/hw32/plan.json COST_BUDGET_USD=0 npm run gate:cost
+```

@@ -72,7 +72,7 @@ npm run demo:dlq
 npm run demo:duplicate
 ```
 
-## Grading
+## Snapshot check
 
 ```bash
 docker compose up -d --wait

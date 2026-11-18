@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 name() { node -p "require('$ROOT/k8s/names.json').$1"; }
 CLUSTER="$(name cluster)"
-IMAGE="$(name image)"
+IMAGE="${HW32_IMAGE:-$(name image)}"
 PG_IMAGE="$(name postgresImage)"
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then

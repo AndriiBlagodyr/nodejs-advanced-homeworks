@@ -1,0 +1,8 @@
+{
+  "iss": "https://token.actions.githubusercontent.com",
+  "aud": "hw32-deploy",
+  "sub": [
+    "repo:AndriiBlagodyr@44027355/nodejs-advanced-homeworks@1345837420:*",
+    "repo:AndriiBlagodyr/nodejs-advanced-homeworks:*"
+  ]
+}

@@ -36,7 +36,7 @@ https://github.com/AndriiBlagodyr/nodejs-advanced-homeworks/actions/runs/4417190
 
 ### Дозволи ролі `hw31-gha-teardown`
 
-Trust: `Principal.Federated` на `token.actions.githubusercontent.com`, `StringEquals` на `aud` = `sts.amazonaws.com`, `StringLike` на `sub` = `repo:AndriiBlagodyr/nodejs-advanced-homeworks:*` і на незмінний суб'єкт цього репозиторію `repo:AndriiBlagodyr@44027355/nodejs-advanced-homeworks@1345837420:*`. GitHub для цього репозиторію віддає саме другий `sub`, тож без нього `AssumeRoleWithWebIdentity` повертає AccessDenied. В `Action` зірки немає. `Resource: "*"` стоїть там, де API EC2, RDS, ELB, IAM і Budgets не приймають ARN ресурсу. Бакет стану обмежений його власним ARN.
+Trust: `Principal.Federated` на `token.actions.githubusercontent.com`, `StringEquals` на `aud` = `sts.amazonaws.com`, `StringLike` на `sub` = `repo:AndriiBlagodyr/nodejs-advanced-homeworks:*` і на незмінний суб'єкт цього репозиторію `repo:AndriiBlagodyr@44027355/nodejs-advanced-homeworks@1345837420:*`. GitHub для цього репозиторію віддає саме другий `sub`, тож без нього `AssumeRoleWithWebIdentity` повертає AccessDenied. В `Action` зірки немає. `Resource: "*"` стоїть там, де API EC2, RDS, ELB і Budgets не приймають ARN ресурсу. `iam:PutRolePolicy` і `iam:AttachRolePolicy` обмежені `role/hw31-*`. Бакет стану обмежений його власним ARN.
 
 - `budgets:ModifyBudget` — створити і змінити бюджет $5.
 - `budgets:ViewBudget` — прочитати бюджет під час destroy.
@@ -155,11 +155,11 @@ Trust: `Principal.Federated` на `token.actions.githubusercontent.com`, `String
 - `iam:TagRole` — OIDC provider, роль CI і роль виконання Lambda.
 - `iam:UntagRole` — OIDC provider, роль CI і роль виконання Lambda.
 - `iam:ListRolePolicies` — OIDC provider, роль CI і роль виконання Lambda.
-- `iam:PutRolePolicy` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:PutRolePolicy` — лише `role/hw31-*`: роль не може дописати політику чужій ролі.
 - `iam:GetRolePolicy` — OIDC provider, роль CI і роль виконання Lambda.
 - `iam:DeleteRolePolicy` — OIDC provider, роль CI і роль виконання Lambda.
 - `iam:ListAttachedRolePolicies` — OIDC provider, роль CI і роль виконання Lambda.
-- `iam:AttachRolePolicy` — OIDC provider, роль CI і роль виконання Lambda.
+- `iam:AttachRolePolicy` — лише `role/hw31-*`: роль не може прикріпити політику чужій ролі.
 - `iam:DetachRolePolicy` — OIDC provider, роль CI і роль виконання Lambda.
 - `iam:ListInstanceProfilesForRole` — OIDC provider, роль CI і роль виконання Lambda.
 - `iam:CreateOpenIDConnectProvider` — OIDC provider, роль CI і роль виконання Lambda.

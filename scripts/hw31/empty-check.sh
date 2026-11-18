@@ -34,32 +34,6 @@ as_int() {
   echo "$1"
 }
 
-tagged_in() {
-  local region="$1" token="" total=0 page count pages=0
-  while true; do
-    pages=$((pages + 1))
-    if [ "$pages" -gt 20 ]; then
-      echo "tag page did not end in $region" >&2
-      exit 1
-    fi
-    if [ -z "$token" ]; then
-      page="$(aws resourcegroupstaggingapi get-resources --region "$region" \
-        --tag-filters Key=Project,Values=nodejs-pro-hw31 --output json)"
-    else
-      page="$(aws resourcegroupstaggingapi get-resources --region "$region" \
-        --tag-filters Key=Project,Values=nodejs-pro-hw31 \
-        --pagination-token "$token" --output json)"
-    fi
-    count="$(jq '.ResourceTagMappingList | length' <<<"$page")"
-    total=$((total + $(as_int "$count")))
-    token="$(jq -r '.PaginationToken // empty' <<<"$page")"
-    if [ -z "$token" ]; then
-      break
-    fi
-  done
-  echo "$total"
-}
-
 state_left=0
 for file in evidence/demo-state.json evidence/base-state.json; do
   if [ ! -f "$file" ]; then
@@ -75,11 +49,17 @@ rds=0
 alb=0
 nat=0
 eip=0
+# Contract commands, written out. A different filter makes 0 mean a different set.
 for R in "${regions[@]}"; do
-  tagged=$((tagged + $(tagged_in "$R")))
+  tagged=$((tagged + $(as_int "$(aws resourcegroupstaggingapi get-resources --region "$R" \
+    --tag-filters Key=Project,Values=nodejs-pro-hw31 Key=Stack,Values=demo \
+    --query 'length(ResourceTagMappingList)' --output text)")))
+  tagged=$((tagged + $(as_int "$(aws resourcegroupstaggingapi get-resources --region "$R" \
+    --tag-filters Key=Project,Values=nodejs-pro-hw31 Key=Stack,Values=base \
+    --query 'length(ResourceTagMappingList)' --output text)")))
   rds=$((rds + $(as_int "$(aws rds describe-db-instances --region "$R" --query 'length(DBInstances)' --output text)")))
   alb=$((alb + $(as_int "$(aws elbv2 describe-load-balancers --region "$R" --query 'length(LoadBalancers)' --output text)")))
-  nat=$((nat + $(as_int "$(aws ec2 describe-nat-gateways --region "$R" --filter Name=state,Values=available --query 'length(NatGateways)' --output text)")))
+  nat=$((nat + $(as_int "$(aws ec2 describe-nat-gateways --region "$R" --filter Name=state,Values=available,pending --query 'length(NatGateways)' --output text)")))
   eip=$((eip + $(as_int "$(aws ec2 describe-addresses --region "$R" --query 'length(Addresses)' --output text)")))
 done
 

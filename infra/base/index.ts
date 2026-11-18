@@ -365,11 +365,9 @@ const teardownPolicy = {
         'iam:TagRole',
         'iam:UntagRole',
         'iam:ListRolePolicies',
-        'iam:PutRolePolicy',
         'iam:GetRolePolicy',
         'iam:DeleteRolePolicy',
         'iam:ListAttachedRolePolicies',
-        'iam:AttachRolePolicy',
         'iam:DetachRolePolicy',
         'iam:ListInstanceProfilesForRole',
         'iam:CreateOpenIDConnectProvider',
@@ -381,6 +379,13 @@ const teardownPolicy = {
         'iam:UpdateOpenIDConnectProviderThumbprint',
       ],
       Resource: '*',
+    },
+    {
+      // PutRolePolicy and AttachRolePolicy on * would let this role grant itself anything.
+      Sid: 'RolePolicyOnHw31',
+      Effect: 'Allow',
+      Action: ['iam:PutRolePolicy', 'iam:AttachRolePolicy'],
+      Resource: 'arn:aws:iam::${aws:PrincipalAccount}:role/hw31-*',
     },
     {
       Sid: 'FindLeftovers',

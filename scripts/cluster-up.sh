@@ -19,22 +19,24 @@ else
   kind create cluster --config "$ROOT/k8s/kind-config.yaml" --wait 90s
 fi
 
-# Official tags are a multi-arch index. kind imports with --digests, then
-# containerd asks for an attestation blob that `docker save` never packed
-# (`content digest … not found`). One platform has no such index.
-docker pull --platform linux/amd64 "$PG_IMAGE"
-
 # A host image does not exist inside the node: without this the pod sits in ErrImagePull.
 # Load one image per call. A single `kind load` of both images is one import:
 # a failure on postgres then leaves the API image out of the node as well.
-load_image() {
-  local image="$1"
-  if kind load docker-image --name "$CLUSTER" "$image"; then
-    return 0
-  fi
-  echo "kind load failed for $image; importing the archive without attestation digests" >&2
-  docker save "$image" | docker exec -i "${CLUSTER}-control-plane" ctr --namespace=k8s.io images import -
-}
-load_image "$IMAGE"
-load_image "$PG_IMAGE"
+kind load docker-image --name "$CLUSTER" "$IMAGE"
+
+# The official Postgres tag is a multi-arch index. On the GitHub runner,
+# `docker save` omits an attestation blob and both `kind load` and `ctr import`
+# fail with `content digest … not found`. The node can pull the public image.
+if docker image inspect "$PG_IMAGE" >/dev/null 2>&1 \
+  && kind load docker-image --name "$CLUSTER" "$PG_IMAGE"; then
+  echo "loaded $PG_IMAGE from the host"
+else
+  ref="$PG_IMAGE"
+  case "$ref" in
+    */*) ;;
+    *) ref="docker.io/library/$ref" ;;
+  esac
+  echo "pulling $ref inside the node" >&2
+  docker exec "${CLUSTER}-control-plane" crictl pull "$ref"
+fi
 kubectl --context "$(name context)" get nodes -o wide

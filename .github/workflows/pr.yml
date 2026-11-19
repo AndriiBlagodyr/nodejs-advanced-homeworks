@@ -1,0 +1,250 @@
+name: pipeline
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hw32-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  IMAGE_REPO: ghcr.io/andriiblagodyr/nodejs-advanced-homeworks
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+      image-ref: ${{ steps.ref.outputs.image-ref }}
+      build-line: ${{ steps.log.outputs.line }}
+      scan-exit: ${{ steps.scan.outputs.exit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Types
+        run: |
+          node node_modules/typescript/bin/tsc --noEmit --pretty false --incremental false
+          node scripts/style-lint.mjs src
+
+      - name: Contract
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          git show origin/main:openapi.yaml > "$RUNNER_TEMP/openapi.base.yaml"
+          node scripts/contract-diff.mjs "$RUNNER_TEMP/openapi.base.yaml" openapi.yaml
+
+      - name: Architecture
+        run: ./node_modules/.bin/depcruise --config .dependency-cruiser.cjs src
+
+      - name: Build-time secret
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            printf '%s' "$NPM_TOKEN" > "$RUNNER_TEMP/npm_token"
+          else
+            openssl rand -hex 16 | tr -d '\n' > "$RUNNER_TEMP/npm_token"
+          fi
+
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ env.IMAGE_REPO }}:${{ env.HEAD_SHA }}
+          secret-files: |
+            npm_token=${{ runner.temp }}/npm_token
+
+      - id: ref
+        run: echo "image-ref=${IMAGE_REPO}:${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+
+      - id: log
+        run: echo "line=image-build" >> "$GITHUB_OUTPUT"
+
+      - name: Make the package public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          name="nodejs-advanced-homeworks"
+          for path in \
+            "/users/${owner}/packages/container/${name}/visibility" \
+            "/user/packages/container/${name}/visibility"
+          do
+            code="$(gh api --method PUT "$path" -f visibility=public -i 2>/dev/null | awk 'BEGIN{c=""} /^HTTP/{c=$2} END{print c}' || true)"
+            echo "visibility http=${code:-none}"
+            if [ "$code" = "200" ] || [ "$code" = "204" ]; then
+              exit 0
+            fi
+          done
+          echo "package visibility unchanged; the job token cannot see the package yet"
+
+      - name: Pull the pushed image
+        run: docker pull "${IMAGE_REPO}:${HEAD_SHA}"
+
+      - id: scan
+        env:
+          SCAN_MAX: "50"
+          SCAN_SEVERITY: CRITICAL,HIGH
+          SCAN_IMAGE: ${{ env.IMAGE_REPO }}:${{ env.HEAD_SHA }}
+        run: |
+          set +e
+          npm run scan
+          code=$?
+          echo "exit=${code}" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+      actions: write
+    env:
+      IMAGE_REF: ${{ needs.build.outputs.image-ref }}
+      BUILT_DIGEST: ${{ needs.build.outputs.digest }}
+      PULUMI_BACKEND_URL: file://${{ github.workspace }}/.pulumi-ci
+      SKIP_VAULT: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Record the single build
+        run: |
+          mkdir -p pipeline-evidence
+          printf '%s\n' "${{ needs.build.outputs.build-line }}" > pipeline-evidence/build.log
+          printf '%s\n' "${{ needs.build.outputs.scan-exit }}" > pipeline-evidence/scan.exit
+
+      - name: OIDC gate
+        env:
+          OIDC_ISSUER: https://token.actions.githubusercontent.com
+          OIDC_AUDIENCE: hw32-deploy
+          OIDC_POLICY: oidc/policy.json
+        run: |
+          set -o pipefail
+          node scripts/oidc-gate.mjs | tee pipeline-evidence/oidc.txt
+
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull the built digest
+        run: docker pull "${IMAGE_REPO}@${BUILT_DIGEST}"
+
+      - uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
+        with:
+          cluster_name: hw28
+          config: k8s/kind-config.yaml
+          wait: 180s
+
+      - name: Load images
+        env:
+          HW32_IMAGE: ${{ needs.build.outputs.image-ref }}
+        run: |
+          docker tag "${IMAGE_REPO}@${BUILT_DIGEST}" "$HW32_IMAGE"
+          npm run cluster:up
+          bash scripts/kind-digest.sh "$HW32_IMAGE" "${IMAGE_REPO}@${BUILT_DIGEST}"
+
+      - name: Job secrets
+        run: node scripts/job-env.mjs
+
+      - name: Install Pulumi
+        run: |
+          curl -fsSL https://get.pulumi.com | sh
+          echo "$HOME/.pulumi/bin" >> "$GITHUB_PATH"
+
+      - name: Pulumi preview
+        run: |
+          # pulumi preview writes plan.json for the cost gate. pulumi up follows only if this passes.
+          npm run --silent preview -- --json > pipeline-evidence/plan.json
+
+      - name: Cost gate
+        env:
+          PLAN_JSON: pipeline-evidence/plan.json
+          COST_BUDGET_USD: "100"
+          COST_GATE_BYPASS: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'cost-approved') && '1' || '0' }}
+        run: npm run gate:cost
+
+      - name: Pulumi up
+        env:
+          HW32_IMAGE: ${{ env.IMAGE_REPO }}@${{ needs.build.outputs.digest }}
+        run: npm run up -- --config replicas=2 --config profile=hardened
+
+      - name: Rollout gate
+        env:
+          HW32_IMAGE: ${{ env.IMAGE_REPO }}@${{ needs.build.outputs.digest }}
+          ROLLOUT_MIN: "2000"
+          LOAD_CONCURRENCY: "32"
+        run: |
+          set -o pipefail
+          npm run demo:rollout | tee pipeline-evidence/rollout.txt
+
+      - name: Deployment manifest
+        if: always()
+        run: |
+          mkdir -p pipeline-evidence
+          kubectl --context kind-hw28 -n marketplace get deploy api -o json > pipeline-evidence/deployment.json
+
+      - name: Evidence
+        if: always()
+        env:
+          GATE_SCAN_EXIT: ${{ needs.build.outputs.scan-exit }}
+        run: |
+          image=""
+          digest=""
+          if [ -s pipeline-evidence/deployment.json ]; then
+            image="$(jq -r '.spec.template.spec.containers[0].image // empty' pipeline-evidence/deployment.json 2>/dev/null || true)"
+            digest="$(printf '%s' "$image" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const m=s.match(/sha256:[0-9a-f]{64}/);process.stdout.write(m?m[0]:"")})')"
+          fi
+          echo "built=${BUILT_DIGEST}"
+          echo "deployed=${digest}"
+          DEPLOYED_DIGEST="$digest" node scripts/collect-evidence.mjs pipeline-evidence
+          if [ -z "$digest" ] || [ "$digest" != "$BUILT_DIGEST" ]; then
+            echo "digest mismatch" >&2
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: pipeline-evidence
+          path: pipeline-evidence
+          if-no-files-found: ignore

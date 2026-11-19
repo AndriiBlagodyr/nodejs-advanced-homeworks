@@ -1,0 +1,103 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: Registry digest to promote (sha256:...)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  HEAD_SHA: ${{ github.sha }}
+  IMAGE_REPO: ghcr.io/andriiblagodyr/nodejs-advanced-homeworks
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+      packages: read
+    env:
+      PULUMI_BACKEND_URL: file://${{ github.workspace }}/.pulumi-ci
+      SKIP_VAULT: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: OIDC gate
+        env:
+          OIDC_ISSUER: https://token.actions.githubusercontent.com
+          OIDC_AUDIENCE: hw32-deploy
+          OIDC_POLICY: oidc/policy.json
+        run: node scripts/oidc-gate.mjs
+
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: image
+        env:
+          DIGEST_INPUT: ${{ inputs.digest }}
+        run: |
+          set -o pipefail
+          if [ -n "${DIGEST_INPUT:-}" ]; then
+            echo "present=1" >> "$GITHUB_OUTPUT"
+            echo "digest=${DIGEST_INPUT}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ref="${IMAGE_REPO}:${HEAD_SHA}"
+          if ! docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+            echo "present=0" >> "$GITHUB_OUTPUT"
+            echo "no image published for this commit"
+            exit 0
+          fi
+          digest="$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "present=1" >> "$GITHUB_OUTPUT"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Pull the digest
+        if: steps.image.outputs.present == '1'
+        run: docker pull "${IMAGE_REPO}@${{ steps.image.outputs.digest }}"
+
+      - uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
+        if: steps.image.outputs.present == '1'
+        with:
+          cluster_name: hw28
+          config: k8s/kind-config.yaml
+          wait: 180s
+
+      - name: Job secrets
+        if: steps.image.outputs.present == '1'
+        run: node scripts/job-env.mjs
+
+      - name: Install Pulumi
+        if: steps.image.outputs.present == '1'
+        run: |
+          curl -fsSL https://get.pulumi.com | sh
+          echo "$HOME/.pulumi/bin" >> "$GITHUB_PATH"
+
+      - name: Load and deploy the same digest
+        if: steps.image.outputs.present == '1'
+        env:
+          HW32_IMAGE: ${{ env.IMAGE_REPO }}@${{ steps.image.outputs.digest }}
+        run: |
+          docker tag "$HW32_IMAGE" "${IMAGE_REPO}:${HEAD_SHA}"
+          HW32_IMAGE="${IMAGE_REPO}:${HEAD_SHA}" npm run cluster:up
+          bash scripts/kind-digest.sh "${IMAGE_REPO}:${HEAD_SHA}" "$HW32_IMAGE"
+          npm run up -- --config replicas=2 --config profile=hardened

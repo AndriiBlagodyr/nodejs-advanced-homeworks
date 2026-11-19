@@ -338,7 +338,7 @@ no matter how careful the relay is.
   `npm run outbox:purge` (one-shot sweep). The relay never declares topology.
   With `REDIS_QUEUE_URL` set, the consumer also enqueues `send-receipt`.
 
-## Grading
+## Snapshot check
 
 ```bash
 docker compose up -d --wait

@@ -531,7 +531,7 @@ no matter how careful the relay is.
   `npm run outbox:purge` (one-shot sweep). The relay never declares topology.
   With `REDIS_QUEUE_URL` set, the consumer also enqueues `send-receipt`.
 
-## Grading
+## Snapshot check
 
 One-time ES256 key pair and pepper for the run. The real signing key stays in
 the vault; this pair lives only in a temp dir that is deleted right after it is

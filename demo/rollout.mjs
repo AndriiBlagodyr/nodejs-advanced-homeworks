@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { fail, kubectl, kubectlJson, names, pulumi, report, ROOT, sleep } from './kit.mjs';
 
 const PROFILE_IDS = { hardened: 1, broken: 0 };
-const MIN_REQUESTS = 5000;
+const MIN_REQUESTS = Number(process.env.ROLLOUT_MIN ?? 5000);
 const BASELINE_MS = 3000;
 /**
  * Load stays on this long after the last old pod is gone. Longer than the

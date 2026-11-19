@@ -84,7 +84,7 @@ deployable (after tagging prod):
 }
 ```
 
-## Grading
+## Snapshot check
 
 ```bash
 # 1. Start stack

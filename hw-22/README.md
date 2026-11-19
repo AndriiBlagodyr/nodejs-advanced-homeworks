@@ -136,7 +136,7 @@ no matter how careful the relay is.
   `npm run relay` (polls every 500 ms, sweeps retention every 10 min) and
   `npm run outbox:purge` (one-shot sweep). The relay never declares topology.
 
-## Grading
+## Snapshot check
 
 ```bash
 docker compose up -d --wait

@@ -46,7 +46,7 @@ Retry catches **only** Postgres `40001` (serialization_failure) and `40P01`
 must surface immediately — blind retries would hide real failures or amplify
 them. The whole transaction (including the reads) is re-run from scratch.
 
-## Grading
+## Snapshot check
 
 ```bash
 docker compose up -d --wait

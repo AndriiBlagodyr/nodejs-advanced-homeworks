@@ -50,7 +50,7 @@ latest dump, compares `count(*) || sum(total_cents)` on `orders`, and prints
 
 Full drill protocol is in [`RESTORE-DRILL.md`](./RESTORE-DRILL.md).
 
-## Grading
+## Snapshot check
 
 ```bash
 docker compose up -d --wait

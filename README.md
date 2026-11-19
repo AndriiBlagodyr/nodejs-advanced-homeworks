@@ -1,3 +1,105 @@
+# Course project
+
+Marketplace API. One NestJS service, Postgres, and one business contour: an authenticated caller places an order, the stock check and the outbox row commit together, and a second request reads that order back. The sections below this one are the homework notes. This section is the map a reviewer uses.
+
+The running system is the repository root. Folders `hw-03` through `hw-29` are snapshots of earlier steps, copied when the next homework started. HW-31 and HW-32 were not copied again: their code is the current root (`infra/base`, `infra/demo`, `.github/workflows`, `oidc/`). Moving it into new folders would split the service the acceptance run starts.
+
+## Main contour
+
+Place an order, then read it back.
+
+1. `POST /orders` with a bearer access token and an `Idempotency-Key`.
+2. The body is validated (`CreateOrderDto`). A bad body does not reach the stock check.
+3. `AuthGuard` rejects a missing or dead token with 401. Reading or streaming someone else's order returns 403.
+4. `placeOrder` decrements stock with `stock >= quantity` in the same transaction as the order and the `order.placed` outbox row. A shortfall rolls the order back.
+5. The order row is in Postgres. A replay of the same idempotency key returns the same order and `Idempotent-Replayed: true`.
+6. The relay publishes the outbox row to RabbitMQ. That is the background step. The order is already stored before the broker sees it.
+7. `GET /orders/:orderId` returns the stored order. `GET /orders/:orderId/events` is the owner's stream of status events.
+8. The request log line and the trace share one id. Metrics are the RED series. The dashboard is `observability/grafana/dashboards/red.json`.
+9. `npm run test:e2e` covers the HTTP contour. `npm run test:unit` covers the business rules without HTTP. `npm run test:integration` hits the real database.
+10. The same image digest is what the pipeline deploys into kind. The green run is [pipeline 44399064478](https://github.com/AndriiBlagodyr/nodejs-advanced-homeworks/actions/runs/44399064478). The push to `main` after that merge is [deploy 44478884659](https://github.com/AndriiBlagodyr/nodejs-advanced-homeworks/actions/runs/44478884659).
+
+Liveness is `GET /healthz`. Readiness is `GET /readyz`. They are different paths.
+
+## Local run and tests
+
+One command starts every component of this contour: Postgres, PgBouncer, RabbitMQ, both Redis instances, the object store, Jaeger, Prometheus, and Grafana.
+
+```bash
+docker compose up -d --wait
+```
+
+The acceptance exports, the vault bypass, and the three observability demos are the block under `## Grading` further down. `npm run start` exits non-zero and names every missing variable when the config is broken. It does not open the database first.
+
+```bash
+npm ci
+npm run test:unit
+npm run test:integration
+npm run test:e2e
+npm run test:contract
+```
+
+The API contract is `openapi.yaml`.
+
+## Block and path
+
+Every block uses the course tool. Nothing was replaced.
+
+| Block | Path | Where it is | Why this and not another |
+| --- | --- | --- | --- |
+| Architecture note | course, this section | root README | The homework notes stay below. This section is the decision record. |
+| API contract | course, OpenAPI | `openapi.yaml` | The machine diff is `scripts/contract-diff.mjs`, run in the pipeline. |
+| Config fails closed | course | `npm run start` | A missing variable is a non-zero exit that names the variable. |
+| Secrets | course, vault from HW-11 | `scripts/with-secrets.sh` | Values are not in git. The acceptance run sets `SKIP_VAULT=1` and exports them. |
+| Schema and migrations | course, TypeORM | `src/migrations` | The schema is applied by `npm run migrate`, not by synchronize. |
+| No lost update | course | `src/orders/place-order.ts` | The stock check and the insert share one transaction. |
+| Pool and backup | course | `pgbouncer` service, `RESTORE-DRILL.md` | The app talks to the pooler. The restore drill is the proof the backup can be read. |
+| Authentication and ownership | course, HW-24 | `src/auth` | 401 is the guard. 403 is the ownership check in the order service. |
+| Validation | course | DTO on `POST /orders` | class-validator rejects the body before the transaction. |
+| Background work | course, outbox and RabbitMQ | `src/outbox`, `npm run relay` | The publish happens after the commit, from the relay. |
+| Realtime | course | `GET /orders/:id/events` | The stream is only for the owner of that order. |
+| Redis | course, HW-23 | `src/redis` | Cache, session, rate limit, and the receipts queue are separate uses. |
+| Files | course, HW-26 | `src/files` | Presigned upload. Not part of the order contour. |
+| Local Docker | course | `docker-compose.yml`, `docker/` | `docker compose up -d --wait`. The production image is multi-stage and distroless. |
+| Deploy described as code | course, Pulumi and kind | `infra/`, `k8s/` | `npm run up` applies the digest. `demo:rollout` requires `failed=0`. |
+| Deploy off the laptop | course, both accepted forms | links below | The pipeline deploys into kind on the runner. The AWS stack was created and then destroyed. |
+| Health, logs, metrics, traces | course, HW-29 | `src/observability`, `observability/` | `demo:logs`, `demo:metrics`, `demo:trace`. |
+| Tests and pipeline | course, HW-32 | `.github/workflows/pr.yml` | Four gates, each fails on a broken input. The image is built once. |
+
+## Trade-offs
+
+Chose one service and one order contour, because a second service would add a deploy and no new proof. The cost is that files, cache, and orders share a process.
+
+Chose the outbox row in the same transaction as the order, because publishing to RabbitMQ inside the transaction would lie if the broker accepted and the database rolled back. The cost is a relay and at-least-once delivery.
+
+Chose kind on the GitHub runner as the deploy the pipeline proves, because a public host was not a homework. The AWS program is the other accepted proof, and it is torn down. The teardown run with six zeros is [44171907792](https://github.com/AndriiBlagodyr/nodejs-advanced-homeworks/actions/runs/44171907792).
+
+## Decision log
+
+- Orders stay the main contour. Products, files, and the cache are supporting modules.
+- Secrets stay in the HW-11 vault. CI generates one-job values and masks them. Nothing cloud-shaped is a repository secret.
+- The image is promoted by digest. The tag is only a name for humans and for `kind load`.
+- HW-31 is destroyed on a schedule. The account does not keep the stack between reviews.
+- Snapshot folders stop at `hw-29`. Later homework stays at the root so `npm ci` and `docker compose` have one project.
+
+## Environment
+
+| Variable | джерело | What it is for |
+| --- | --- | --- |
+| `DATABASE_URL` | local Postgres container, or the vault in a deployed pod | Application database. |
+| `APP_DB_PASSWORD` | vault (HW-11); acceptance run exports it | Password the pod and Postgres use. |
+| `BROKER_URL` | compose default `amqp://app:app@127.0.0.1:5672` | RabbitMQ for the outbox relay. |
+| `REDIS_URL` | compose, port 6390 | Cache, sessions, rate limit. |
+| `REDIS_QUEUE_URL` | compose, port 6391 | BullMQ receipts queue. |
+| `JWT_PRIVATE_KEY`, `JWT_PUBLIC_KEY`, `JWT_KID`, `REFRESH_TOKEN_PEPPER` | vault; the acceptance run generates a one-time P-256 pair | Access tokens and refresh-token hashes. |
+| `STORAGE_*` | compose MinIO values in the Grading block | File uploads. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `PROMETHEUS_URL`, `TRACE_API_URL` | the Jaeger and Prometheus services in compose | Traces and the RED scrape. |
+| `SKIP_VAULT` | set to `1` by the acceptance run | The runner has no vault. |
+| `PULUMI_CONFIG_PASSPHRASE` | generated for the CI job, not committed | Encrypts the local Pulumi file backend. |
+| `NPM_TOKEN`, `PACT_BROKER_URL`, `PACT_BROKER_TOKEN` | GitHub Actions secrets, declared in the CI/CD section | Image build and the optional Pact broker. |
+
+Rotation: a new JWT pair is a new `kid`. Old access tokens die with their expiry. Reuse of a refresh token revokes the family. The CI job does not rotate a long-lived cloud key, because it does not have one.
+
 # HW-29 — Observability: one key from the log to the span
 
 The question is no longer "does the service survive a rollout" (HW-28) but
